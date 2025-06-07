@@ -1,1 +1,166 @@
 test
+
+plotCscanFollwoing:
+function[] = plotCscanFollowing(x,y,t,Data,t_delay,t_width, gateopt, th_gate, th_sync, gateside)
+    % Find the time gate indices based on t_delay and t_width
+    t1 = t_delay;
+    t2 = t_delay + t_width;
+    [~,i1] = min(abs(t-t1));
+    [~,i2] = min(abs(t-t2));
+    
+    % Initialize output arrays
+    MaxAmp = zeros(max(x)+1, max(y)+1);  % Fixed indexing
+    TOF = zeros(max(x)+1, max(y)+1);     % Fixed indexing
+    
+    % Optional: Implement sync detection (currently incomplete in original)
+    % For now, we'll use the simple time gate approach
+    
+    if gateside == 1
+        for ix = 1:max(x)+1  % Fixed indexing to match data dimensions
+            for iy = 1:max(y)+1  % Fixed indexing to match data dimensions
+                [MaxAmp(ix,iy), TOF(ix,iy)] = max(squeeze(Data(ix,iy,i1:i2)));
+                TOF(ix,iy) = TOF(ix,iy) + i1 - 1;  % Adjust TOF to absolute time index
+            end
+        end
+    elseif gateside == 2
+        for ix = 1:max(x)+1
+            for iy = 1:max(y)+1
+                [MaxAmp(ix,iy), TOF(ix,iy)] = min(squeeze(Data(ix,iy,i1:i2)));
+                TOF(ix,iy) = TOF(ix,iy) + i1 - 1;  % Adjust TOF to absolute time index
+            end
+        end
+    else
+        for ix = 1:max(x)+1
+            for iy = 1:max(y)+1
+                [MaxAmp(ix,iy), TOF(ix,iy)] = max(squeeze(abs(Data(ix,iy,i1:i2))));
+                TOF(ix,iy) = TOF(ix,iy) + i1 - 1;  % Adjust TOF to absolute time index
+            end
+        end
+    end
+
+    % Apply amplitude threshold
+    MaxAmp(abs(MaxAmp) < th_gate) = NaN;
+    TOF(abs(MaxAmp) < th_gate) = NaN;
+
+    % Plot results
+    figure; hold on; box on;
+    if gateopt == 1
+        imagesc(x,y,MaxAmp.');
+        title(sprintf('Amplitude C-scan (Gate: %.2f - %.2f μs)', t1, t2));
+        cb = colorbar; 
+        ylabel(cb, 'Amplitude (V)');
+    elseif gateopt == 2
+        imagesc(x,y,t(TOF).');
+        title(sprintf('Time-of-Flight C-scan (Gate: %.2f - %.2f μs)', t1, t2));
+        cb = colorbar;
+        ylabel(cb, 'Time (μs)');
+    end
+    xlabel("x axis (scan index)"); 
+    ylabel("y axis (scan index)");
+    xlim([min(x) max(x)]);
+    ylim([min(y) max(y)]);
+    colormap(jet);
+end
+
+
+plotCscan
+function[] = plotCscan(x,y,t,Data,t1,t2,gateopt,th_gate,gateside)
+    % Find time gate indices
+    [~,i1] = min(abs(t-t1));
+    [~,i2] = min(abs(t-t2));
+
+    % Initialize output arrays with correct dimensions
+    MaxAmp = zeros(max(x)+1, max(y)+1);  % Fixed indexing
+    TOF = zeros(max(x)+1, max(y)+1);     % Fixed indexing
+
+    if gateside == 1
+        for ix = 1:max(x)+1  % Fixed indexing to match data dimensions
+            for iy = 1:max(y)+1  % Fixed indexing to match data dimensions
+                [MaxAmp(ix,iy), TOF(ix,iy)] = max(squeeze(Data(ix,iy,i1:i2)));
+                TOF(ix,iy) = TOF(ix,iy) + i1 - 1;  % Adjust TOF to absolute time index
+            end
+        end
+    elseif gateside == 2
+        for ix = 1:max(x)+1
+            for iy = 1:max(y)+1
+                [MaxAmp(ix,iy), TOF(ix,iy)] = min(squeeze(Data(ix,iy,i1:i2)));
+                TOF(ix,iy) = TOF(ix,iy) + i1 - 1;  % Adjust TOF to absolute time index
+            end
+        end
+    else
+        for ix = 1:max(x)+1
+            for iy = 1:max(y)+1
+                [MaxAmp(ix,iy), TOF(ix,iy)] = max(squeeze(abs(Data(ix,iy,i1:i2))));
+                TOF(ix,iy) = TOF(ix,iy) + i1 - 1;  % Adjust TOF to absolute time index
+            end
+        end
+    end
+    
+    % Apply amplitude threshold
+    MaxAmp(abs(MaxAmp) < th_gate) = NaN;
+    TOF(abs(MaxAmp) < th_gate) = NaN;
+
+    % Plot results
+    figure; hold on; box on;
+    if gateopt == 1
+        imagesc(x,y,MaxAmp.');
+        title(sprintf('Amplitude C-scan (Gate: %.2f - %.2f μs)', t1, t2));
+        cb = colorbar; 
+        ylabel(cb, 'Amplitude (V)');
+    elseif gateopt == 2
+        imagesc(x,y,t(TOF).');
+        title(sprintf('Time-of-Flight C-scan (Gate: %.2f - %.2f μs)', t1, t2));
+        cb = colorbar;
+        ylabel(cb, 'Time (μs)');
+    end
+    xlabel("x axis (scan index)"); 
+    ylabel("y axis (scan index)");
+    xlim([min(x) max(x)]);
+    ylim([min(y) max(y)]);
+    colormap(jet);
+end
+
+plotData
+clc; clear all; close all; 
+
+% Load data file
+[fname, location] = uigetfile({'*.mat';'*.*'}, 'File Selector'); 
+load(fullfile(location, fname)); 
+clear location fname; 
+
+% Plot A-scan at position (50,50)
+plotAscan(t,Data,50,50) 
+
+% Plot B-scans
+plotBscan(t,Data,1,x,y,50) % plot x axis at y=50
+plotBscan(t,Data,2,x,y,50) % plot y axis at x=50
+
+% Plot B-scans with absolute values
+plotBscan(t,abs(Data),1,x,y,50) % plot x axis 
+plotBscan(t,abs(Data),2,x,y,50) % plot y axis 
+
+% Set parameters for C-scan analysis
+gateopt = 1;        % 1 = amplitude, 2 = time-of-flight
+th_gate = 0.06;     % amplitude threshold
+gateside = 1;       % 1 = max, 2 = min, other = abs max
+
+% Time gate parameters
+t1 = 68.5;          % start time (μs)
+t2 = 69.5;          % end time (μs)
+
+% Plot regular C-scans
+gateopt = 1; 
+plotCscan(x,y,t,Data,t1,t2,gateopt,th_gate,gateside)
+gateopt = 2;
+plotCscan(x,y,t,Data,t1,t2,gateopt,th_gate,gateside)
+
+% Parameters for following gate C-scans
+th_sync = 0.8;      % sync threshold
+t_delay = 0.88;     % delay time (μs)
+t_width = 0.5;      % gate width (μs)
+
+% Plot following gate C-scans
+gateopt = 1;
+plotCscanFollowing(x,y,t,Data,t_delay,t_width, gateopt, th_gate, th_sync, gateside)
+gateopt = 2;
+plotCscanFollowing(x,y,t,Data,t_delay,t_width, gateopt, th_gate, th_sync, gateside)
