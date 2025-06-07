@@ -1,4 +1,4 @@
-%% Ultrasonic Standing Wave Filtering Methods - COMPLETE WITH ALL METHODS
+%% Ultrasonic Standing Wave Filtering Methods - USING YOUR PLOTTING FUNCTIONS
 % Comprehensive collection of methods to filter standing waves from ultrasonic data
 % Input: Data (64x64x2020 ultrasonic scan data)
 % Supporting variables: x, y, t
@@ -27,6 +27,11 @@ fprintf('Requested toi2: %.2f μs, Found: %.2f μs (index %d)\n', toi2, actual_t
 defect_x = 32; % Middle x position
 defect_y = 60;  % Near bottom edge (adjust based on actual defect location)
 
+% C-scan plotting parameters
+gateopt = 1;        % 1 = amplitude, 2 = time-of-flight
+th_gate = 0.01;     % amplitude threshold (adjust based on your data)
+gateside = 1;       % 1 = max, 2 = min, other = abs max
+
 % Set colormap (fixed)
 colormap(parula);
 
@@ -39,9 +44,28 @@ fprintf('nx (x-positions): %d, ny (y-positions): %d, nt (time samples): %d\n', n
 fprintf('x range: %.2f to %.2f, y range: %.2f to %.2f\n', min(x), max(x), min(y), max(y));
 fprintf('Time range: %.2f to %.2f μs\n', min(t), max(t));
 
+%% Plot Original Data for Reference
+fprintf('\n=== PLOTTING ORIGINAL DATA ===\n');
+fprintf('Plotting original A-scan at position (%d,%d)...\n', defect_x, defect_y);
+plotAscan(t, Data, defect_x, defect_y);
+title(sprintf('Original A-scan at Position (%d,%d)', defect_x, defect_y));
+
+fprintf('Plotting original B-scans...\n');
+plotBscan(t, Data, 1, x, y, defect_y); % B-scan along x-axis at y=defect_y
+title(sprintf('Original B-scan (X-axis) at Y=%d', defect_y));
+
+plotBscan(t, Data, 2, x, y, defect_x); % B-scan along y-axis at x=defect_x  
+title(sprintf('Original B-scan (Y-axis) at X=%d', defect_x));
+
+fprintf('Plotting original C-scans...\n');
+plotCscan(x, y, t, Data, actual_toi1, actual_toi1, gateopt, th_gate, gateside);
+title(sprintf('Original C-scan at toi1 = %.2f μs', actual_toi1));
+
+plotCscan(x, y, t, Data, actual_toi2, actual_toi2, gateopt, th_gate, gateside);
+title(sprintf('Original C-scan at toi2 = %.2f μs', actual_toi2));
+
 %% Method 1: Background/Reference Subtraction
-% Best when you have a reference scan without defects or can estimate background
-fprintf('\nMethod 1: Background/Reference Subtraction...\n');
+fprintf('\n=== Method 1: Background/Reference Subtraction ===\n');
 
 % Use defect-free region as reference (top 70% of scan to avoid bottom defects)
 ref_height = round(0.7 * size(Data,1));
@@ -51,47 +75,19 @@ background_estimate = mean(ref_region, [1,2]); % Average over spatial dimensions
 % Subtract background from all data
 Data_bg_sub = Data - background_estimate;
 
-% VERIFIED C-SCAN PLOTTING: Original C-scans
-figure('Name', 'Original C-scans - Method 1');
-subplot(1,2,1);
-imagesc(x, y, Data(:,:,i1).'); % VERIFIED: Transpose needed for correct orientation
-title(sprintf('Original C-scan at toi1 = %.2f μs', actual_toi1)); % ADDED: toi display
-xlabel('X position'); ylabel('Y position');
-colorbar; axis equal tight;
+% Plot results using your functions
+fprintf('Plotting Method 1 results...\n');
+plotCscan(x, y, t, Data_bg_sub, actual_toi1, actual_toi1, gateopt, th_gate, gateside);
+title(sprintf('Method 1: Background Subtracted C-scan at toi1 = %.2f μs', actual_toi1));
 
-subplot(1,2,2);
-imagesc(x, y, Data(:,:,i2).'); % VERIFIED: Transpose needed for correct orientation
-title(sprintf('Original C-scan at toi2 = %.2f μs', actual_toi2)); % ADDED: toi display
-xlabel('X position'); ylabel('Y position');
-colorbar; axis equal tight;
+plotCscan(x, y, t, Data_bg_sub, actual_toi2, actual_toi2, gateopt, th_gate, gateside);
+title(sprintf('Method 1: Background Subtracted C-scan at toi2 = %.2f μs', actual_toi2));
 
-% VERIFIED C-SCAN PLOTTING: Filtered C-scans
-figure('Name', 'Background Subtracted C-scans - Method 1');
-subplot(1,2,1);
-imagesc(x, y, Data_bg_sub(:,:,i1).'); % VERIFIED: Correct data slice and orientation
-title(sprintf('Background Subtracted C-scan at toi1 = %.2f μs', actual_toi1));
-xlabel('X position'); ylabel('Y position');
-colorbar; axis equal tight;
-
-subplot(1,2,2);
-imagesc(x, y, Data_bg_sub(:,:,i2).'); % VERIFIED: Correct data slice and orientation
-title(sprintf('Background Subtracted C-scan at toi2 = %.2f μs', actual_toi2));
-xlabel('X position'); ylabel('Y position');
-colorbar; axis equal tight;
-
-% A-scan comparison
-figure('Name', 'A-scan Comparison - Method 1');
-plot(t, squeeze(Data(defect_x, defect_y, :)), 'b-', 'LineWidth', 1.5);
-hold on;
-plot(t, squeeze(Data_bg_sub(defect_x, defect_y, :)), 'r-', 'LineWidth', 1.5);
-xlabel('Time (μs)'); ylabel('Amplitude');
-title(sprintf('A-scan at Position (%d,%d)', defect_x, defect_y));
-legend('Original', 'Background Subtracted', 'Location', 'best');
-grid on;
+plotAscan(t, Data_bg_sub, defect_x, defect_y);
+title(sprintf('Method 1: Background Subtracted A-scan at Position (%d,%d)', defect_x, defect_y));
 
 %% Method 2: Temporal Moving Average Subtraction
-% Removes slowly varying standing wave components in time domain
-fprintf('\nMethod 2: Temporal Moving Average Subtraction...\n');
+fprintf('\n=== Method 2: Temporal Moving Average Subtraction ===\n');
 
 window_size = 100; % Adjust based on standing wave characteristics
 Data_temporal_filt = zeros(size(Data));
@@ -107,33 +103,19 @@ for i = 1:size(Data,1)
     end
 end
 
-% VERIFIED C-SCAN PLOTTING: Temporal filtered C-scans
-figure('Name', 'Temporal Moving Average Filtered C-scans - Method 2');
-subplot(1,2,1);
-imagesc(x, y, Data_temporal_filt(:,:,i1).');
-title(sprintf('Temporal Filtered C-scan at toi1 = %.2f μs', actual_toi1));
-xlabel('X position'); ylabel('Y position');
-colorbar; axis equal tight;
+% Plot results using your functions
+fprintf('Plotting Method 2 results...\n');
+plotCscan(x, y, t, Data_temporal_filt, actual_toi1, actual_toi1, gateopt, th_gate, gateside);
+title(sprintf('Method 2: Temporal Filtered C-scan at toi1 = %.2f μs', actual_toi1));
 
-subplot(1,2,2);
-imagesc(x, y, Data_temporal_filt(:,:,i2).');
-title(sprintf('Temporal Filtered C-scan at toi2 = %.2f μs', actual_toi2));
-xlabel('X position'); ylabel('Y position');
-colorbar; axis equal tight;
+plotCscan(x, y, t, Data_temporal_filt, actual_toi2, actual_toi2, gateopt, th_gate, gateside);
+title(sprintf('Method 2: Temporal Filtered C-scan at toi2 = %.2f μs', actual_toi2));
 
-% A-scan comparison
-figure('Name', 'A-scan Comparison - Method 2');
-plot(t, squeeze(Data(defect_x, defect_y, :)), 'b-', 'LineWidth', 1.5);
-hold on;
-plot(t, squeeze(Data_temporal_filt(defect_x, defect_y, :)), 'r-', 'LineWidth', 1.5);
-xlabel('Time (μs)'); ylabel('Amplitude');
-title(sprintf('A-scan at Position (%d,%d) - Temporal Filtering', defect_x, defect_y));
-legend('Original', 'Temporal Filtered', 'Location', 'best');
-grid on;
+plotAscan(t, Data_temporal_filt, defect_x, defect_y);
+title(sprintf('Method 2: Temporal Filtered A-scan at Position (%d,%d)', defect_x, defect_y));
 
 %% Method 3: Spatial Median Filtering
-% Removes spatially coherent standing wave patterns
-fprintf('\nMethod 3: Spatial Median Filtering...\n');
+fprintf('\n=== Method 3: Spatial Median Filtering ===\n');
 
 Data_spatial_filt = zeros(size(Data));
 for k = 1:size(Data,3)
@@ -142,33 +124,19 @@ for k = 1:size(Data,3)
     Data_spatial_filt(:,:,k) = Data(:,:,k) - spatial_median;
 end
 
-% VERIFIED C-SCAN PLOTTING: Spatial filtered C-scans
-figure('Name', 'Spatial Median Filtered C-scans - Method 3');
-subplot(1,2,1);
-imagesc(x, y, Data_spatial_filt(:,:,i1).');
-title(sprintf('Spatial Median Filtered C-scan at toi1 = %.2f μs', actual_toi1));
-xlabel('X position'); ylabel('Y position');
-colorbar; axis equal tight;
+% Plot results using your functions
+fprintf('Plotting Method 3 results...\n');
+plotCscan(x, y, t, Data_spatial_filt, actual_toi1, actual_toi1, gateopt, th_gate, gateside);
+title(sprintf('Method 3: Spatial Median Filtered C-scan at toi1 = %.2f μs', actual_toi1));
 
-subplot(1,2,2);
-imagesc(x, y, Data_spatial_filt(:,:,i2).');
-title(sprintf('Spatial Median Filtered C-scan at toi2 = %.2f μs', actual_toi2));
-xlabel('X position'); ylabel('Y position');
-colorbar; axis equal tight;
+plotCscan(x, y, t, Data_spatial_filt, actual_toi2, actual_toi2, gateopt, th_gate, gateside);
+title(sprintf('Method 3: Spatial Median Filtered C-scan at toi2 = %.2f μs', actual_toi2));
 
-% A-scan comparison
-figure('Name', 'A-scan Comparison - Method 3');
-plot(t, squeeze(Data(defect_x, defect_y, :)), 'b-', 'LineWidth', 1.5);
-hold on;
-plot(t, squeeze(Data_spatial_filt(defect_x, defect_y, :)), 'r-', 'LineWidth', 1.5);
-xlabel('Time (μs)'); ylabel('Amplitude');
-title(sprintf('A-scan at Position (%d,%d) - Spatial Filtering', defect_x, defect_y));
-legend('Original', 'Spatial Filtered', 'Location', 'best');
-grid on;
+plotAscan(t, Data_spatial_filt, defect_x, defect_y);
+title(sprintf('Method 3: Spatial Median Filtered A-scan at Position (%d,%d)', defect_x, defect_y));
 
 %% Method 4: Frequency Domain Filtering
-% Target specific standing wave frequencies with bandstop filter
-fprintf('\nMethod 4: Frequency Domain Filtering...\n');
+fprintf('\n=== Method 4: Frequency Domain Filtering ===\n');
 
 % Design bandstop filter around standing wave frequency
 f_notch_range = [f_standing-0.5e6, f_standing+0.5e6]; % ±0.5 MHz around 5 MHz
@@ -185,36 +153,21 @@ for i = 1:size(Data,1)
     end
 end
 
-% VERIFIED C-SCAN PLOTTING: Frequency filtered C-scans
-figure('Name', 'Frequency Domain Filtered C-scans - Method 4');
-subplot(1,2,1);
-imagesc(x, y, Data_freq_filt(:,:,i1).');
-title(sprintf('Frequency Filtered C-scan at toi1 = %.2f μs', actual_toi1));
-xlabel('X position'); ylabel('Y position');
-colorbar; axis equal tight;
+% Plot results using your functions
+fprintf('Plotting Method 4 results...\n');
+plotCscan(x, y, t, Data_freq_filt, actual_toi1, actual_toi1, gateopt, th_gate, gateside);
+title(sprintf('Method 4: Frequency Filtered C-scan at toi1 = %.2f μs', actual_toi1));
 
-subplot(1,2,2);
-imagesc(x, y, Data_freq_filt(:,:,i2).');
-title(sprintf('Frequency Filtered C-scan at toi2 = %.2f μs', actual_toi2));
-xlabel('X position'); ylabel('Y position');
-colorbar; axis equal tight;
+plotCscan(x, y, t, Data_freq_filt, actual_toi2, actual_toi2, gateopt, th_gate, gateside);
+title(sprintf('Method 4: Frequency Filtered C-scan at toi2 = %.2f μs', actual_toi2));
 
-% A-scan comparison
-figure('Name', 'A-scan Comparison - Method 4');
-plot(t, squeeze(Data(defect_x, defect_y, :)), 'b-', 'LineWidth', 1.5);
-hold on;
-plot(t, squeeze(Data_freq_filt(defect_x, defect_y, :)), 'r-', 'LineWidth', 1.5);
-xlabel('Time (μs)'); ylabel('Amplitude');
-title(sprintf('A-scan at Position (%d,%d) - Frequency Filtering', defect_x, defect_y));
-legend('Original', 'Frequency Filtered', 'Location', 'best');
-grid on;
+plotAscan(t, Data_freq_filt, defect_x, defect_y);
+title(sprintf('Method 4: Frequency Filtered A-scan at Position (%d,%d)', defect_x, defect_y));
 
 %% Method 5: Principal Component Analysis (PCA)
-% Remove dominant standing wave modes
-fprintf('\nMethod 5: Principal Component Analysis (PCA)...\n');
+fprintf('\n=== Method 5: Principal Component Analysis (PCA) ===\n');
 
 % Reshape data for PCA
-[nx, ny, nt] = size(Data);
 Data_reshaped = reshape(Data, nx*ny, nt);
 
 % Perform PCA
@@ -237,33 +190,19 @@ xlabel('Principal Component'); ylabel('Eigenvalue');
 title('PCA Eigenvalues (First 20 Components)');
 grid on;
 
-% VERIFIED C-SCAN PLOTTING: PCA filtered C-scans
-figure('Name', 'PCA Filtered C-scans - Method 5');
-subplot(1,2,1);
-imagesc(x, y, Data_pca_filt(:,:,i1).');
-title(sprintf('PCA Filtered C-scan at toi1 = %.2f μs', actual_toi1));
-xlabel('X position'); ylabel('Y position');
-colorbar; axis equal tight;
+% Plot results using your functions
+fprintf('Plotting Method 5 results...\n');
+plotCscan(x, y, t, Data_pca_filt, actual_toi1, actual_toi1, gateopt, th_gate, gateside);
+title(sprintf('Method 5: PCA Filtered C-scan at toi1 = %.2f μs', actual_toi1));
 
-subplot(1,2,2);
-imagesc(x, y, Data_pca_filt(:,:,i2).');
-title(sprintf('PCA Filtered C-scan at toi2 = %.2f μs', actual_toi2));
-xlabel('X position'); ylabel('Y position');
-colorbar; axis equal tight;
+plotCscan(x, y, t, Data_pca_filt, actual_toi2, actual_toi2, gateopt, th_gate, gateside);
+title(sprintf('Method 5: PCA Filtered C-scan at toi2 = %.2f μs', actual_toi2));
 
-% A-scan comparison
-figure('Name', 'A-scan Comparison - Method 5');
-plot(t, squeeze(Data(defect_x, defect_y, :)), 'b-', 'LineWidth', 1.5);
-hold on;
-plot(t, squeeze(Data_pca_filt(defect_x, defect_y, :)), 'r-', 'LineWidth', 1.5);
-xlabel('Time (μs)'); ylabel('Amplitude');
-title(sprintf('A-scan at Position (%d,%d) - PCA Filtering', defect_x, defect_y));
-legend('Original', 'PCA Filtered', 'Location', 'best');
-grid on;
+plotAscan(t, Data_pca_filt, defect_x, defect_y);
+title(sprintf('Method 5: PCA Filtered A-scan at Position (%d,%d)', defect_x, defect_y));
 
 %% Method 6: Adaptive Filtering with Defect-Free Reference
-% Use defect-free regions to estimate standing wave pattern
-fprintf('\nMethod 6: Adaptive Filtering with Defect-Free Reference...\n');
+fprintf('\n=== Method 6: Adaptive Filtering with Defect-Free Reference ===\n');
 
 % Define defect-free regions (avoid bottom edge where defects are)
 defect_free_height = round(0.8 * size(Data,1)); % Top 80% of scan
@@ -278,33 +217,19 @@ for k = 1:size(Data,3)
     Data_adaptive_filt(:,:,k) = slice - background;
 end
 
-% VERIFIED C-SCAN PLOTTING: Adaptive filtered C-scans
-figure('Name', 'Adaptive Filtered C-scans - Method 6');
-subplot(1,2,1);
-imagesc(x, y, Data_adaptive_filt(:,:,i1).');
-title(sprintf('Adaptive Filtered C-scan at toi1 = %.2f μs', actual_toi1));
-xlabel('X position'); ylabel('Y position');
-colorbar; axis equal tight;
+% Plot results using your functions
+fprintf('Plotting Method 6 results...\n');
+plotCscan(x, y, t, Data_adaptive_filt, actual_toi1, actual_toi1, gateopt, th_gate, gateside);
+title(sprintf('Method 6: Adaptive Filtered C-scan at toi1 = %.2f μs', actual_toi1));
 
-subplot(1,2,2);
-imagesc(x, y, Data_adaptive_filt(:,:,i2).');
-title(sprintf('Adaptive Filtered C-scan at toi2 = %.2f μs', actual_toi2));
-xlabel('X position'); ylabel('Y position');
-colorbar; axis equal tight;
+plotCscan(x, y, t, Data_adaptive_filt, actual_toi2, actual_toi2, gateopt, th_gate, gateside);
+title(sprintf('Method 6: Adaptive Filtered C-scan at toi2 = %.2f μs', actual_toi2));
 
-% A-scan comparison
-figure('Name', 'A-scan Comparison - Method 6');
-plot(t, squeeze(Data(defect_x, defect_y, :)), 'b-', 'LineWidth', 1.5);
-hold on;
-plot(t, squeeze(Data_adaptive_filt(defect_x, defect_y, :)), 'r-', 'LineWidth', 1.5);
-xlabel('Time (μs)'); ylabel('Amplitude');
-title(sprintf('A-scan at Position (%d,%d) - Adaptive Filtering', defect_x, defect_y));
-legend('Original', 'Adaptive Filtered', 'Location', 'best');
-grid on;
+plotAscan(t, Data_adaptive_filt, defect_x, defect_y);
+title(sprintf('Method 6: Adaptive Filtered A-scan at Position (%d,%d)', defect_x, defect_y));
 
 %% Method 7: Discrete Wavelet Transform (DWT) Denoising
-% Treat standing waves as noise to be removed
-fprintf('\nMethod 7: Discrete Wavelet Transform (DWT) Denoising...\n');
+fprintf('\n=== Method 7: Discrete Wavelet Transform (DWT) Denoising ===\n');
 
 Data_dwt_filt = zeros(size(Data));
 wavelet_name = 'db8'; % Daubechies 8 - good for ultrasonic signals
@@ -334,33 +259,19 @@ for i = 1:size(Data,1)
     end
 end
 
-% VERIFIED C-SCAN PLOTTING: DWT denoised C-scans
-figure('Name', 'DWT Denoised C-scans - Method 7');
-subplot(1,2,1);
-imagesc(x, y, Data_dwt_filt(:,:,i1).');
-title(sprintf('DWT Denoised C-scan at toi1 = %.2f μs', actual_toi1));
-xlabel('X position'); ylabel('Y position');
-colorbar; axis equal tight;
+% Plot results using your functions
+fprintf('Plotting Method 7 results...\n');
+plotCscan(x, y, t, Data_dwt_filt, actual_toi1, actual_toi1, gateopt, th_gate, gateside);
+title(sprintf('Method 7: DWT Denoised C-scan at toi1 = %.2f μs', actual_toi1));
 
-subplot(1,2,2);
-imagesc(x, y, Data_dwt_filt(:,:,i2).');
-title(sprintf('DWT Denoised C-scan at toi2 = %.2f μs', actual_toi2));
-xlabel('X position'); ylabel('Y position');
-colorbar; axis equal tight;
+plotCscan(x, y, t, Data_dwt_filt, actual_toi2, actual_toi2, gateopt, th_gate, gateside);
+title(sprintf('Method 7: DWT Denoised C-scan at toi2 = %.2f μs', actual_toi2));
 
-% A-scan comparison
-figure('Name', 'A-scan Comparison - Method 7');
-plot(t, squeeze(Data(defect_x, defect_y, :)), 'b-', 'LineWidth', 1.5);
-hold on;
-plot(t, squeeze(Data_dwt_filt(defect_x, defect_y, :)), 'r-', 'LineWidth', 1.5);
-xlabel('Time (μs)'); ylabel('Amplitude');
-title(sprintf('A-scan at Position (%d,%d) - DWT Denoising', defect_x, defect_y));
-legend('Original', 'DWT Denoised', 'Location', 'best');
-grid on;
+plotAscan(t, Data_dwt_filt, defect_x, defect_y);
+title(sprintf('Method 7: DWT Denoised A-scan at Position (%d,%d)', defect_x, defect_y));
 
 %% Method 8: Frequency Band Filtering with DWT (CORRECTED)
-% Remove specific frequency bands containing standing waves
-fprintf('\nMethod 8: Frequency Band Filtering with DWT (CORRECTED)...\n');
+fprintf('\n=== Method 8: Frequency Band Filtering with DWT (CORRECTED) ===\n');
 
 Data_dwt_band_filt = zeros(size(Data));
 wavelet_name = 'db8';
@@ -402,33 +313,19 @@ for i = 1:size(Data,1)
     end
 end
 
-% VERIFIED C-SCAN PLOTTING: DWT band filtered C-scans
-figure('Name', 'DWT Band Filtered C-scans - Method 8');
-subplot(1,2,1);
-imagesc(x, y, Data_dwt_band_filt(:,:,i1).');
-title(sprintf('DWT Band Filtered C-scan at toi1 = %.2f μs', actual_toi1));
-xlabel('X position'); ylabel('Y position');
-colorbar; axis equal tight;
+% Plot results using your functions
+fprintf('Plotting Method 8 results...\n');
+plotCscan(x, y, t, Data_dwt_band_filt, actual_toi1, actual_toi1, gateopt, th_gate, gateside);
+title(sprintf('Method 8: DWT Band Filtered C-scan at toi1 = %.2f μs', actual_toi1));
 
-subplot(1,2,2);
-imagesc(x, y, Data_dwt_band_filt(:,:,i2).');
-title(sprintf('DWT Band Filtered C-scan at toi2 = %.2f μs', actual_toi2));
-xlabel('X position'); ylabel('Y position');
-colorbar; axis equal tight;
+plotCscan(x, y, t, Data_dwt_band_filt, actual_toi2, actual_toi2, gateopt, th_gate, gateside);
+title(sprintf('Method 8: DWT Band Filtered C-scan at toi2 = %.2f μs', actual_toi2));
 
-% A-scan comparison
-figure('Name', 'A-scan Comparison - Method 8');
-plot(t, squeeze(Data(defect_x, defect_y, :)), 'b-', 'LineWidth', 1.5);
-hold on;
-plot(t, squeeze(Data_dwt_band_filt(defect_x, defect_y, :)), 'r-', 'LineWidth', 1.5);
-xlabel('Time (μs)'); ylabel('Amplitude');
-title(sprintf('A-scan at Position (%d,%d) - DWT Band Filtering', defect_x, defect_y));
-legend('Original', 'DWT Band Filtered', 'Location', 'best');
-grid on;
+plotAscan(t, Data_dwt_band_filt, defect_x, defect_y);
+title(sprintf('Method 8: DWT Band Filtered A-scan at Position (%d,%d)', defect_x, defect_y));
 
 %% Method 9: Bandstop Filtering (SIMPLIFIED from CWT)
-% Remove standing wave frequencies with multiple bandstop filters
-fprintf('\nMethod 9: Multiple Bandstop Filtering (Simplified)...\n');
+fprintf('\n=== Method 9: Multiple Bandstop Filtering (Simplified) ===\n');
 
 Data_bandstop_filt = zeros(size(Data));
 
@@ -453,7 +350,8 @@ for harm = harmonics
     [b_temp, a_temp] = butter(filter_order, f_range/nyquist_freq, 'stop');
     
     % Cascade filters
-    [combined_b, combined_a] = conv(combined_b, b_temp), conv(combined_a, a_temp);
+    combined_b = conv(combined_b, b_temp);
+    combined_a = conv(combined_a, a_temp);
 end
 
 fprintf('Processing bandstop filtering...\n');
@@ -465,33 +363,19 @@ for i = 1:size(Data,1)
     end
 end
 
-% VERIFIED C-SCAN PLOTTING: Bandstop filtered C-scans
-figure('Name', 'Bandstop Filtered C-scans - Method 9');
-subplot(1,2,1);
-imagesc(x, y, Data_bandstop_filt(:,:,i1).');
-title(sprintf('Bandstop Filtered C-scan at toi1 = %.2f μs', actual_toi1));
-xlabel('X position'); ylabel('Y position');
-colorbar; axis equal tight;
+% Plot results using your functions
+fprintf('Plotting Method 9 results...\n');
+plotCscan(x, y, t, Data_bandstop_filt, actual_toi1, actual_toi1, gateopt, th_gate, gateside);
+title(sprintf('Method 9: Bandstop Filtered C-scan at toi1 = %.2f μs', actual_toi1));
 
-subplot(1,2,2);
-imagesc(x, y, Data_bandstop_filt(:,:,i2).');
-title(sprintf('Bandstop Filtered C-scan at toi2 = %.2f μs', actual_toi2));
-xlabel('X position'); ylabel('Y position');
-colorbar; axis equal tight;
+plotCscan(x, y, t, Data_bandstop_filt, actual_toi2, actual_toi2, gateopt, th_gate, gateside);
+title(sprintf('Method 9: Bandstop Filtered C-scan at toi2 = %.2f μs', actual_toi2));
 
-% A-scan comparison
-figure('Name', 'A-scan Comparison - Method 9');
-plot(t, squeeze(Data(defect_x, defect_y, :)), 'b-', 'LineWidth', 1.5);
-hold on;
-plot(t, squeeze(Data_bandstop_filt(defect_x, defect_y, :)), 'r-', 'LineWidth', 1.5);
-xlabel('Time (μs)'); ylabel('Amplitude');
-title(sprintf('A-scan at Position (%d,%d) - Bandstop Filtering', defect_x, defect_y));
-legend('Original', 'Bandstop Filtered', 'Location', 'best');
-grid on;
+plotAscan(t, Data_bandstop_filt, defect_x, defect_y);
+title(sprintf('Method 9: Bandstop Filtered A-scan at Position (%d,%d)', defect_x, defect_y));
 
 %% Method 10: 2D Wavelet Transform for Spatial Patterns (CORRECTED)
-% Remove spatially coherent standing wave patterns using 2D wavelets
-fprintf('\nMethod 10: 2D Wavelet Transform for Spatial Patterns (CORRECTED)...\n');
+fprintf('\n=== Method 10: 2D Wavelet Transform for Spatial Patterns (CORRECTED) ===\n');
 
 Data_2d_wavelet_filt = zeros(size(Data));
 wavelet_name = 'db4'; % Shorter wavelet for 2D processing
@@ -522,33 +406,19 @@ for k = 1:size(Data,3)
     Data_2d_wavelet_filt(:,:,k) = waverec2(c, s, wavelet_name);
 end
 
-% VERIFIED C-SCAN PLOTTING: 2D wavelet filtered C-scans
-figure('Name', '2D Wavelet Filtered C-scans - Method 10');
-subplot(1,2,1);
-imagesc(x, y, Data_2d_wavelet_filt(:,:,i1).');
-title(sprintf('2D Wavelet Filtered C-scan at toi1 = %.2f μs', actual_toi1));
-xlabel('X position'); ylabel('Y position');
-colorbar; axis equal tight;
+% Plot results using your functions
+fprintf('Plotting Method 10 results...\n');
+plotCscan(x, y, t, Data_2d_wavelet_filt, actual_toi1, actual_toi1, gateopt, th_gate, gateside);
+title(sprintf('Method 10: 2D Wavelet Filtered C-scan at toi1 = %.2f μs', actual_toi1));
 
-subplot(1,2,2);
-imagesc(x, y, Data_2d_wavelet_filt(:,:,i2).');
-title(sprintf('2D Wavelet Filtered C-scan at toi2 = %.2f μs', actual_toi2));
-xlabel('X position'); ylabel('Y position');
-colorbar; axis equal tight;
+plotCscan(x, y, t, Data_2d_wavelet_filt, actual_toi2, actual_toi2, gateopt, th_gate, gateside);
+title(sprintf('Method 10: 2D Wavelet Filtered C-scan at toi2 = %.2f μs', actual_toi2));
 
-% A-scan comparison
-figure('Name', 'A-scan Comparison - Method 10');
-plot(t, squeeze(Data(defect_x, defect_y, :)), 'b-', 'LineWidth', 1.5);
-hold on;
-plot(t, squeeze(Data_2d_wavelet_filt(defect_x, defect_y, :)), 'r-', 'LineWidth', 1.5);
-xlabel('Time (μs)'); ylabel('Amplitude');
-title(sprintf('A-scan at Position (%d,%d) - 2D Wavelet Filtering', defect_x, defect_y));
-legend('Original', '2D Wavelet Filtered', 'Location', 'best');
-grid on;
+plotAscan(t, Data_2d_wavelet_filt, defect_x, defect_y);
+title(sprintf('Method 10: 2D Wavelet Filtered A-scan at Position (%d,%d)', defect_x, defect_y));
 
 %% Method 11: Adaptive Wavelet Thresholding
-% Automatically determine thresholds based on signal statistics
-fprintf('\nMethod 11: Adaptive Wavelet Thresholding...\n');
+fprintf('\n=== Method 11: Adaptive Wavelet Thresholding ===\n');
 
 Data_adaptive_wavelet_filt = zeros(size(Data));
 
@@ -577,33 +447,19 @@ for i = 1:size(Data,1)
     end
 end
 
-% VERIFIED C-SCAN PLOTTING: Adaptive wavelet thresholded C-scans
-figure('Name', 'Adaptive Wavelet Thresholded C-scans - Method 11');
-subplot(1,2,1);
-imagesc(x, y, Data_adaptive_wavelet_filt(:,:,i1).');
-title(sprintf('Adaptive Wavelet Thresholded C-scan at toi1 = %.2f μs', actual_toi1));
-xlabel('X position'); ylabel('Y position');
-colorbar; axis equal tight;
+% Plot results using your functions
+fprintf('Plotting Method 11 results...\n');
+plotCscan(x, y, t, Data_adaptive_wavelet_filt, actual_toi1, actual_toi1, gateopt, th_gate, gateside);
+title(sprintf('Method 11: Adaptive Wavelet Thresholded C-scan at toi1 = %.2f μs', actual_toi1));
 
-subplot(1,2,2);
-imagesc(x, y, Data_adaptive_wavelet_filt(:,:,i2).');
-title(sprintf('Adaptive Wavelet Thresholded C-scan at toi2 = %.2f μs', actual_toi2));
-xlabel('X position'); ylabel('Y position');
-colorbar; axis equal tight;
+plotCscan(x, y, t, Data_adaptive_wavelet_filt, actual_toi2, actual_toi2, gateopt, th_gate, gateside);
+title(sprintf('Method 11: Adaptive Wavelet Thresholded C-scan at toi2 = %.2f μs', actual_toi2));
 
-% A-scan comparison
-figure('Name', 'A-scan Comparison - Method 11');
-plot(t, squeeze(Data(defect_x, defect_y, :)), 'b-', 'LineWidth', 1.5);
-hold on;
-plot(t, squeeze(Data_adaptive_wavelet_filt(defect_x, defect_y, :)), 'r-', 'LineWidth', 1.5);
-xlabel('Time (μs)'); ylabel('Amplitude');
-title(sprintf('A-scan at Position (%d,%d) - Adaptive Wavelet Thresholding', defect_x, defect_y));
-legend('Original', 'Adaptive Wavelet Filtered', 'Location', 'best');
-grid on;
+plotAscan(t, Data_adaptive_wavelet_filt, defect_x, defect_y);
+title(sprintf('Method 11: Adaptive Wavelet Thresholded A-scan at Position (%d,%d)', defect_x, defect_y));
 
 %% Method 12: Pixel-wise FFT Phase Analysis for Standing Wave Removal
-% NEW METHOD: Analyze phase coherence to distinguish standing waves from defects
-fprintf('\nMethod 12: Pixel-wise FFT Phase Analysis...\n');
+fprintf('\n=== Method 12: Pixel-wise FFT Phase Analysis ===\n');
 
 % Parameters for phase analysis
 nfft = 2^nextpow2(size(Data,3)); % Zero-pad for better frequency resolution
@@ -786,53 +642,26 @@ xlabel('Frequency (MHz)'); ylabel('Average Coherence');
 title('Coherence vs Frequency');
 grid on;
 
-% VERIFIED C-SCAN PLOTTING: Phase Coherence Method
-figure('Name', 'Phase Coherence Filtered C-scans - Method 12a');
-subplot(1,2,1);
-imagesc(x, y, Data_phase_coherence_filt(:,:,i1).');
-title(sprintf('Phase Coherence Filtered C-scan at toi1 = %.2f μs', actual_toi1));
-xlabel('X position'); ylabel('Y position');
-colorbar; axis equal tight;
+% Plot results using your functions
+fprintf('Plotting Method 12a results...\n');
+plotCscan(x, y, t, Data_phase_coherence_filt, actual_toi1, actual_toi1, gateopt, th_gate, gateside);
+title(sprintf('Method 12a: Phase Coherence Filtered C-scan at toi1 = %.2f μs', actual_toi1));
 
-subplot(1,2,2);
-imagesc(x, y, Data_phase_coherence_filt(:,:,i2).');
-title(sprintf('Phase Coherence Filtered C-scan at toi2 = %.2f μs', actual_toi2));
-xlabel('X position'); ylabel('Y position');
-colorbar; axis equal tight;
+plotCscan(x, y, t, Data_phase_coherence_filt, actual_toi2, actual_toi2, gateopt, th_gate, gateside);
+title(sprintf('Method 12a: Phase Coherence Filtered C-scan at toi2 = %.2f μs', actual_toi2));
 
-% VERIFIED C-SCAN PLOTTING: Phase Gradient Method
-figure('Name', 'Phase Gradient Filtered C-scans - Method 12b');
-subplot(1,2,1);
-imagesc(x, y, Data_phase_gradient_filt(:,:,i1).');
-title(sprintf('Phase Gradient Filtered C-scan at toi1 = %.2f μs', actual_toi1));
-xlabel('X position'); ylabel('Y position');
-colorbar; axis equal tight;
+plotAscan(t, Data_phase_coherence_filt, defect_x, defect_y);
+title(sprintf('Method 12a: Phase Coherence Filtered A-scan at Position (%d,%d)', defect_x, defect_y));
 
-subplot(1,2,2);
-imagesc(x, y, Data_phase_gradient_filt(:,:,i2).');
-title(sprintf('Phase Gradient Filtered C-scan at toi2 = %.2f μs', actual_toi2));
-xlabel('X position'); ylabel('Y position');
-colorbar; axis equal tight;
+fprintf('Plotting Method 12b results...\n');
+plotCscan(x, y, t, Data_phase_gradient_filt, actual_toi1, actual_toi1, gateopt, th_gate, gateside);
+title(sprintf('Method 12b: Phase Gradient Filtered C-scan at toi1 = %.2f μs', actual_toi1));
 
-% A-scan comparisons
-figure('Name', 'A-scan Comparison - Method 12');
-subplot(1,2,1);
-plot(t, squeeze(Data(defect_x, defect_y, :)), 'b-', 'LineWidth', 1.5);
-hold on;
-plot(t, squeeze(Data_phase_coherence_filt(defect_x, defect_y, :)), 'r-', 'LineWidth', 1.5);
-xlabel('Time (μs)'); ylabel('Amplitude');
-title(sprintf('Phase Coherence Filtering at (%d,%d)', defect_x, defect_y));
-legend('Original', 'Phase Coherence Filtered', 'Location', 'best');
-grid on;
+plotCscan(x, y, t, Data_phase_gradient_filt, actual_toi2, actual_toi2, gateopt, th_gate, gateside);
+title(sprintf('Method 12b: Phase Gradient Filtered C-scan at toi2 = %.2f μs', actual_toi2));
 
-subplot(1,2,2);
-plot(t, squeeze(Data(defect_x, defect_y, :)), 'b-', 'LineWidth', 1.5);
-hold on;
-plot(t, squeeze(Data_phase_gradient_filt(defect_x, defect_y, :)), 'r-', 'LineWidth', 1.5);
-xlabel('Time (μs)'); ylabel('Amplitude');
-title(sprintf('Phase Gradient Filtering at (%d,%d)', defect_x, defect_y));
-legend('Original', 'Phase Gradient Filtered', 'Location', 'best');
-grid on;
+plotAscan(t, Data_phase_gradient_filt, defect_x, defect_y);
+title(sprintf('Method 12b: Phase Gradient Filtered A-scan at Position (%d,%d)', defect_x, defect_y));
 
 %% Summary and Recommendations
 fprintf('\n=== FILTERING METHOD SUMMARY ===\n');
