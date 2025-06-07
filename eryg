@@ -1,0 +1,623 @@
+%% Method 12: Pixel-wise FFT Phase Analysis for Standing Wave Removal - STANDALONE
+% Advanced phase coherence analysis to identify and remove standing waves
+% while preserving real defect signatures in ultrasonic NDT data
+%
+% INPUTS REQUIRED:
+%   Data - 3D array (nx x ny x nt) containing ultrasonic scan data
+%   x, y - spatial coordinate vectors
+%   t - time vector
+%   fs - sampling frequency (Hz)
+%
+% OUTPUTS:
+%   Data_phase_coherence_filt - Phase coherence filtered data
+%   Data_phase_gradient_filt - Phase gradient filtered data
+%   Analysis plots and diagnostic information
+
+clear; clc;
+
+%% ============================================================================
+%% SETUP AND PARAMETERS - MODIFY THESE FOR YOUR DATA
+%% ============================================================================
+
+% Load your data here - uncomment and modify as needed
+% load('your_data_file.mat'); % Should contain Data, x, y, t
+
+% If you need to set parameters manually:
+fs = 50e6;              % Sampling frequency (50 MHz typical for ultrasonics)
+f_standing = 5e6;       % Expected standing wave frequency (5 MHz)
+
+% Time gates for analysis and visualization
+toi1 = 120;             % First time of interest (μs)
+toi2 = 124;             % Second time of interest (μs)
+
+% Position for A-scan analysis
+defect_x = 32;          % X position for detailed A-scan analysis
+defect_y = 60;          % Y position for detailed A-scan analysis
+
+% Phase analysis parameters
+freq_range = [2e6, 6e6]; % Frequency range for phase analysis (Hz)
+                         % Adjust based on your expected standing wave frequencies
+
+% Filtering parameters
+coherence_percentile = 85;  % Top 15% most coherent regions flagged as standing waves
+phase_reduction_factor = 0.1; % Reduce standing wave amplitudes to 10% of original
+gradient_percentile = 75;     % Top 25% gradient regions for spatial filtering
+
+%% ============================================================================
+%% VERIFICATION AND SETUP
+%% ============================================================================
+
+% Verify data exists
+if ~exist('Data', 'var')
+    error('Data variable not found. Please load your ultrasonic data first.');
+end
+
+% Get data dimensions
+[nx, ny, nt] = size(Data);
+fprintf('=== METHOD 12: PHASE ANALYSIS FOR STANDING WAVE REMOVAL ===\n');
+fprintf('Data dimensions: %dx%dx%d\n', nx, ny, nt);
+
+% Verify coordinate vectors
+if ~exist('x', 'var') || ~exist('y', 'var') || ~exist('t', 'var')
+    warning('Coordinate vectors not found. Creating default vectors.');
+    x = 0:nx-1;
+    y = 0:ny-1;
+    t = (0:nt-1) / fs * 1e6; % Convert to microseconds
+end
+
+fprintf('x range: %.2f to %.2f, y range: %.2f to %.2f\n', min(x), max(x), min(y), max(y));
+fprintf('Time range: %.2f to %.2f μs\n', min(t), max(t));
+
+% Calculate time indices for visualization
+[~,i1] = min(abs(t-toi1));
+[~,i2] = min(abs(t-toi2));
+actual_toi1 = t(i1);
+actual_toi2 = t(i2);
+fprintf('Time gates: toi1=%.2f μs (index %d), toi2=%.2f μs (index %d)\n', ...
+    actual_toi1, i1, actual_toi2, i2);
+
+%% ============================================================================
+%% PHASE ANALYSIS COMPUTATION
+%% ============================================================================
+
+fprintf('\n=== COMPUTING PHASE ANALYSIS ===\n');
+
+% FFT parameters
+nfft = 2^nextpow2(nt);  % Zero-pad for better frequency resolution
+freq_axis = (0:nfft-1) * fs / nfft;
+freq_indices = find(freq_axis >= freq_range(1) & freq_axis <= freq_range(2));
+
+fprintf('FFT length: %d, Frequency range: %.1f-%.1f MHz\n', ...
+    nfft, freq_range(1)/1e6, freq_range(2)/1e6);
+fprintf('Number of frequency bins in range: %d\n', length(freq_indices));
+
+% Initialize arrays
+FFT_Data = zeros(nx, ny, nfft);
+Phase_Data = zeros(nx, ny, length(freq_indices));
+Amplitude_Data = zeros(nx, ny, length(freq_indices));
+
+% Compute pixel-wise FFT
+fprintf('Computing pixel-wise FFT...\n');
+tic;
+for i = 1:nx
+    if mod(i,10) == 0
+        elapsed = toc;
+        fprintf('Progress: %d/%d (%.1fs elapsed)\n', i, nx, elapsed);
+    end
+    for j = 1:ny
+        signal = squeeze(Data(i,j,:));
+        fft_signal = fft(signal, nfft);
+        FFT_Data(i,j,:) = fft_signal;
+        
+        % Extract phase and amplitude in frequency range of interest
+        fft_roi = fft_signal(freq_indices);
+        Phase_Data(i,j,:) = angle(fft_roi);
+        Amplitude_Data(i,j,:) = abs(fft_roi);
+    end
+end
+fprintf('FFT computation completed in %.1f seconds\n', toc);
+
+%% ============================================================================
+%% PHASE COHERENCE ANALYSIS
+%% ============================================================================
+
+fprintf('\n=== ANALYZING PHASE COHERENCE ===\n');
+
+coherence_map = zeros(nx, ny, length(freq_indices));
+standing_wave_mask = zeros(nx, ny, length(freq_indices));
+
+tic;
+for f = 1:length(freq_indices)
+    if mod(f,10) == 0
+        elapsed = toc;
+        fprintf('Frequency progress: %d/%d (%.1fs elapsed)\n', f, length(freq_indices), elapsed);
+    end
+    
+    phase_slice = Phase_Data(:,:,f);
+    
+    % Compute local phase coherence (phase similarity with neighbors)
+    for i = 2:nx-1
+        for j = 2:ny-1
+            % Get 3x3 neighborhood phases
+            neighborhood_phases = phase_slice(i-1:i+1, j-1:j+1);
+            center_phase = phase_slice(i,j);
+            
+            % Compute phase differences (handle phase wrapping properly)
+            phase_diffs = angle(exp(1i*(neighborhood_phases - center_phase)));
+            
+            % Coherence = inverse of phase variance (higher coherence = more standing wave-like)
+            phase_variance = var(phase_diffs(:));
+            coherence_map(i,j,f) = 1 / (phase_variance + 1e-6);
+        end
+    end
+    
+    % Create standing wave mask based on high coherence
+    coherence_threshold = prctile(coherence_map(:,:,f), coherence_percentile);
+    standing_wave_mask(:,:,f) = coherence_map(:,:,f) > coherence_threshold;
+end
+fprintf('Phase coherence analysis completed in %.1f seconds\n', toc);
+
+%% ============================================================================
+%% FIND DOMINANT STANDING WAVE FREQUENCY
+%% ============================================================================
+
+fprintf('\n=== IDENTIFYING DOMINANT FREQUENCIES ===\n');
+
+% Analyze frequency content
+avg_amplitude = squeeze(mean(mean(Amplitude_Data, 1), 2));
+avg_coherence = squeeze(mean(mean(coherence_map, 1), 2));
+
+% Find dominant frequency by coherence (most standing wave-like)
+[max_coherence, dominant_freq_idx] = max(avg_coherence);
+dominant_freq_val = freq_axis(freq_indices(dominant_freq_idx));
+
+fprintf('Dominant standing wave frequency: %.2f MHz\n', dominant_freq_val/1e6);
+fprintf('Maximum coherence value: %.3f\n', max_coherence);
+
+% Report top 5 frequencies by coherence
+[sorted_coherence, sort_idx] = sort(avg_coherence, 'descend');
+fprintf('\nTop 5 frequencies by coherence:\n');
+for i = 1:min(5, length(sort_idx))
+    freq_val = freq_axis(freq_indices(sort_idx(i)));
+    fprintf('  %.2f MHz: Coherence=%.3f, Amplitude=%.3f\n', ...
+        freq_val/1e6, sorted_coherence(i), avg_amplitude(sort_idx(i)));
+end
+
+%% ============================================================================
+%% METHOD 12A: PHASE-COHERENCE BASED FILTERING
+%% ============================================================================
+
+fprintf('\n=== METHOD 12A: PHASE-COHERENCE FILTERING ===\n');
+
+Data_phase_coherence_filt = zeros(size(Data));
+
+tic;
+fprintf('Applying phase-coherence filtering...\n');
+for i = 1:nx
+    if mod(i,10) == 0
+        elapsed = toc;
+        fprintf('Progress: %d/%d (%.1fs elapsed)\n', i, nx, elapsed);
+    end
+    for j = 1:ny
+        signal = squeeze(Data(i,j,:));
+        fft_signal = fft(signal, nfft);
+        
+        % Apply mask to remove coherent (standing wave) frequencies
+        for f = 1:length(freq_indices)
+            freq_idx = freq_indices(f);
+            if standing_wave_mask(i,j,f)
+                % Reduce amplitude at this frequency
+                fft_signal(freq_idx) = fft_signal(freq_idx) * phase_reduction_factor;
+                
+                % Handle negative frequencies (conjugate symmetry for real signals)
+                if freq_idx > 1 && freq_idx <= nfft/2
+                    fft_signal(nfft - freq_idx + 2) = fft_signal(nfft - freq_idx + 2) * phase_reduction_factor;
+                end
+            end
+        end
+        
+        % Reconstruct signal
+        filtered_signal = ifft(fft_signal);
+        Data_phase_coherence_filt(i,j,:) = real(filtered_signal(1:nt));
+    end
+end
+fprintf('Phase-coherence filtering completed in %.1f seconds\n', toc);
+
+%% ============================================================================
+%% METHOD 12B: SPATIAL PHASE GRADIENT FILTERING
+%% ============================================================================
+
+fprintf('\n=== METHOD 12B: SPATIAL PHASE GRADIENT FILTERING ===\n');
+
+Data_phase_gradient_filt = zeros(size(Data));
+
+% Use dominant frequency for gradient analysis
+dominant_phase = Phase_Data(:,:,dominant_freq_idx);
+
+% Compute phase gradients
+[phase_grad_x, phase_grad_y] = gradient(dominant_phase);
+phase_grad_magnitude = sqrt(phase_grad_x.^2 + phase_grad_y.^2);
+
+% Create spatial filter based on phase gradients
+gradient_threshold = prctile(phase_grad_magnitude(:), gradient_percentile);
+spatial_mask = phase_grad_magnitude > gradient_threshold;
+
+fprintf('Phase gradient threshold: %.4f\n', gradient_threshold);
+fprintf('Pixels with high phase gradients: %d/%d (%.1f%%)\n', ...
+    sum(spatial_mask(:)), numel(spatial_mask), 100*sum(spatial_mask(:))/numel(spatial_mask));
+
+% Apply spatial filtering
+tic;
+fprintf('Applying spatial phase gradient filtering...\n');
+for k = 1:nt
+    if mod(k,200) == 0
+        elapsed = toc;
+        fprintf('Time slice progress: %d/%d (%.1fs elapsed)\n', k, nt, elapsed);
+    end
+    
+    slice = Data(:,:,k);
+    filtered_slice = slice;
+    
+    % Smooth regions with high phase gradients
+    if any(spatial_mask(:))
+        for i = 1:nx
+            for j = 1:ny
+                if spatial_mask(i,j)
+                    % Apply local median filter to high-gradient regions
+                    i_min = max(1, i-1);
+                    i_max = min(nx, i+1);
+                    j_min = max(1, j-1);
+                    j_max = min(ny, j+1);
+                    
+                    local_region = slice(i_min:i_max, j_min:j_max);
+                    filtered_slice(i,j) = median(local_region(:));
+                end
+            end
+        end
+    end
+    
+    Data_phase_gradient_filt(:,:,k) = filtered_slice;
+end
+fprintf('Spatial phase gradient filtering completed in %.1f seconds\n', toc);
+
+%% ============================================================================
+%% VISUALIZATION AND ANALYSIS
+%% ============================================================================
+
+fprintf('\n=== GENERATING ANALYSIS PLOTS ===\n');
+
+% Set up plotting parameters
+set(0, 'DefaultFigurePosition', [100, 100, 1200, 800]);
+
+%% Phase Analysis Visualization
+figure('Name', 'Method 12: Phase Analysis Results');
+
+% Plot phase at dominant frequency
+subplot(2,3,1);
+imagesc(x, y, dominant_phase.');
+title(sprintf('Phase at %.2f MHz', dominant_freq_val/1e6));
+xlabel('X position'); ylabel('Y position');
+colorbar; colormap(gca, hsv); axis equal tight;
+
+% Plot coherence map
+subplot(2,3,2);
+imagesc(x, y, coherence_map(:,:,dominant_freq_idx).');
+title('Phase Coherence Map');
+xlabel('X position'); ylabel('Y position');
+colorbar; colormap(gca, parula); axis equal tight;
+
+% Plot standing wave mask
+subplot(2,3,3);
+imagesc(x, y, standing_wave_mask(:,:,dominant_freq_idx).');
+title('Standing Wave Mask');
+xlabel('X position'); ylabel('Y position');
+colorbar; colormap(gca, gray); axis equal tight;
+
+% Plot phase gradients
+subplot(2,3,4);
+imagesc(x, y, phase_grad_magnitude.');
+title('Phase Gradient Magnitude');
+xlabel('X position'); ylabel('Y position');
+colorbar; colormap(gca, parula); axis equal tight;
+
+% Plot frequency spectrum at center pixel
+subplot(2,3,5);
+center_spectrum = squeeze(Amplitude_Data(round(nx/2), round(ny/2), :));
+plot(freq_axis(freq_indices)/1e6, center_spectrum, 'b-', 'LineWidth', 1.5);
+xlabel('Frequency (MHz)'); ylabel('Amplitude');
+title('Frequency Spectrum (Center Pixel)');
+grid on;
+
+% Plot coherence vs frequency
+subplot(2,3,6);
+plot(freq_axis(freq_indices)/1e6, avg_coherence, 'r-', 'LineWidth', 1.5);
+xlabel('Frequency (MHz)'); ylabel('Average Coherence');
+title('Coherence vs Frequency');
+grid on;
+
+%% Original vs Filtered Comparison - A-scans
+figure('Name', 'Method 12: A-scan Comparison');
+
+subplot(1,2,1);
+plot(t, squeeze(Data(defect_x, defect_y, :)), 'b-', 'LineWidth', 1.5);
+hold on;
+plot(t, squeeze(Data_phase_coherence_filt(defect_x, defect_y, :)), 'r-', 'LineWidth', 1.5);
+xlabel('Time (μs)'); ylabel('Amplitude (V)');
+title(sprintf('Method 12a: Phase Coherence Filtering at (%d,%d)', defect_x, defect_y));
+legend('Original', 'Phase Coherence Filtered', 'Location', 'best');
+grid on;
+
+subplot(1,2,2);
+plot(t, squeeze(Data(defect_x, defect_y, :)), 'b-', 'LineWidth', 1.5);
+hold on;
+plot(t, squeeze(Data_phase_gradient_filt(defect_x, defect_y, :)), 'r-', 'LineWidth', 1.5);
+xlabel('Time (μs)'); ylabel('Amplitude (V)');
+title(sprintf('Method 12b: Phase Gradient Filtering at (%d,%d)', defect_x, defect_y));
+legend('Original', 'Phase Gradient Filtered', 'Location', 'best');
+grid on;
+
+%% Time-Gated C-scan Generation
+fprintf('\n=== GENERATING TIME-GATED C-SCANS (%.1f-%.1f μs) ===\n', actual_toi1, actual_toi2);
+
+% Create time-gated C-scans by extracting maximum amplitude in gate
+Cscan_original = zeros(nx, ny);
+Cscan_filtered_12a = zeros(nx, ny);
+Cscan_filtered_12b = zeros(nx, ny);
+
+% Also create TOF (Time of Flight) C-scans
+TOF_original = zeros(nx, ny);
+TOF_filtered_12a = zeros(nx, ny);
+TOF_filtered_12b = zeros(nx, ny);
+
+% Extract features within time gate for each pixel
+for ix = 1:nx
+    for iy = 1:ny
+        % Original data
+        gate_data = squeeze(Data(ix, iy, i1:i2));
+        [max_amp, max_idx] = max(abs(gate_data));
+        Cscan_original(ix, iy) = max_amp;
+        TOF_original(ix, iy) = t(i1 + max_idx - 1);
+        
+        % Method 12a filtered data
+        gate_data_12a = squeeze(Data_phase_coherence_filt(ix, iy, i1:i2));
+        [max_amp_12a, max_idx_12a] = max(abs(gate_data_12a));
+        Cscan_filtered_12a(ix, iy) = max_amp_12a;
+        TOF_filtered_12a(ix, iy) = t(i1 + max_idx_12a - 1);
+        
+        % Method 12b filtered data
+        gate_data_12b = squeeze(Data_phase_gradient_filt(ix, iy, i1:i2));
+        [max_amp_12b, max_idx_12b] = max(abs(gate_data_12b));
+        Cscan_filtered_12b(ix, iy) = max_amp_12b;
+        TOF_filtered_12b(ix, iy) = t(i1 + max_idx_12b - 1);
+    end
+end
+
+%% Plot Time-Gated Maximum Amplitude C-scans
+figure('Name', 'Method 12: Time-Gated C-scan Comparison (Max Amplitude)');
+
+subplot(1,3,1);
+imagesc(x, y, Cscan_original.');
+title(sprintf('Original Gated C-scan\n%.1f-%.1f μs (Max Amp)', actual_toi1, actual_toi2));
+xlabel('X position'); ylabel('Y position');
+colorbar; axis equal tight;
+colormap(jet);
+
+subplot(1,3,2);
+imagesc(x, y, Cscan_filtered_12a.');
+title(sprintf('Method 12a Filtered\n%.1f-%.1f μs (Max Amp)', actual_toi1, actual_toi2));
+xlabel('X position'); ylabel('Y position');
+colorbar; axis equal tight;
+
+subplot(1,3,3);
+imagesc(x, y, Cscan_filtered_12b.');
+title(sprintf('Method 12b Filtered\n%.1f-%.1f μs (Max Amp)', actual_toi1, actual_toi2));
+xlabel('X position'); ylabel('Y position');
+colorbar; axis equal tight;
+
+%% Plot Time-of-Flight C-scans
+figure('Name', 'Method 12: Time-Gated C-scan Comparison (Time-of-Flight)');
+
+subplot(1,3,1);
+imagesc(x, y, TOF_original.');
+title(sprintf('Original TOF C-scan\n%.1f-%.1f μs Gate', actual_toi1, actual_toi2));
+xlabel('X position'); ylabel('Y position');
+c = colorbar; ylabel(c, 'Time (μs)');
+axis equal tight;
+caxis([actual_toi1 actual_toi2]); % Limit color scale to gate range
+
+subplot(1,3,2);
+imagesc(x, y, TOF_filtered_12a.');
+title(sprintf('Method 12a Filtered TOF\n%.1f-%.1f μs Gate', actual_toi1, actual_toi2));
+xlabel('X position'); ylabel('Y position');
+c = colorbar; ylabel(c, 'Time (μs)');
+axis equal tight;
+caxis([actual_toi1 actual_toi2]);
+
+subplot(1,3,3);
+imagesc(x, y, TOF_filtered_12b.');
+title(sprintf('Method 12b Filtered TOF\n%.1f-%.1f μs Gate', actual_toi1, actual_toi2));
+xlabel('X position'); ylabel('Y position');
+c = colorbar; ylabel(c, 'Time (μs)');
+axis equal tight;
+caxis([actual_toi1 actual_toi2]);
+
+%% Optional: Apply threshold to remove noise
+threshold = 0.01; % Adjust based on your noise level
+
+% Create thresholded versions
+Cscan_original_thresh = Cscan_original;
+Cscan_filtered_12a_thresh = Cscan_filtered_12a;
+Cscan_filtered_12b_thresh = Cscan_filtered_12b;
+
+Cscan_original_thresh(Cscan_original < threshold) = NaN;
+Cscan_filtered_12a_thresh(Cscan_filtered_12a < threshold) = NaN;
+Cscan_filtered_12b_thresh(Cscan_filtered_12b < threshold) = NaN;
+
+% Plot thresholded C-scans
+figure('Name', 'Method 12: Thresholded Time-Gated C-scans');
+
+subplot(1,3,1);
+imagesc(x, y, Cscan_original_thresh.');
+title(sprintf('Original Thresholded\n%.1f-%.1f μs (th=%.3f)', actual_toi1, actual_toi2, threshold));
+xlabel('X position'); ylabel('Y position');
+colorbar; axis equal tight;
+
+subplot(1,3,2);
+imagesc(x, y, Cscan_filtered_12a_thresh.');
+title(sprintf('Method 12a Thresholded\n%.1f-%.1f μs (th=%.3f)', actual_toi1, actual_toi2, threshold));
+xlabel('X position'); ylabel('Y position');
+colorbar; axis equal tight;
+
+subplot(1,3,3);
+imagesc(x, y, Cscan_filtered_12b_thresh.');
+title(sprintf('Method 12b Thresholded\n%.1f-%.1f μs (th=%.3f)', actual_toi1, actual_toi2, threshold));
+xlabel('X position'); ylabel('Y position');
+colorbar; axis equal tight;
+
+%% Statistics for time-gated C-scans
+fprintf('\n=== TIME-GATED C-SCAN STATISTICS ===\n');
+fprintf('Gate range: %.1f-%.1f μs (%d time samples)\n', actual_toi1, actual_toi2, i2-i1+1);
+fprintf('\nMaximum Amplitude Statistics:\n');
+fprintf('Original:    Mean=%.4f, Max=%.4f, Std=%.4f\n', ...
+    mean(Cscan_original(:)), max(Cscan_original(:)), std(Cscan_original(:)));
+fprintf('Method 12a:  Mean=%.4f, Max=%.4f, Std=%.4f\n', ...
+    mean(Cscan_filtered_12a(:)), max(Cscan_filtered_12a(:)), std(Cscan_filtered_12a(:)));
+fprintf('Method 12b:  Mean=%.4f, Max=%.4f, Std=%.4f\n', ...
+    mean(Cscan_filtered_12b(:)), max(Cscan_filtered_12b(:)), std(Cscan_filtered_12b(:)));
+
+% Calculate improvement in dynamic range
+dynamic_range_original = max(Cscan_original(:)) / mean(Cscan_original(:));
+dynamic_range_12a = max(Cscan_filtered_12a(:)) / mean(Cscan_filtered_12a(:));
+dynamic_range_12b = max(Cscan_filtered_12b(:)) / mean(Cscan_filtered_12b(:));
+
+fprintf('\nDynamic Range (Max/Mean):\n');
+fprintf('Original:    %.2f\n', dynamic_range_original);
+fprintf('Method 12a:  %.2f (%.1fx improvement)\n', dynamic_range_12a, dynamic_range_12a/dynamic_range_original);
+fprintf('Method 12b:  %.2f (%.1fx improvement)\n', dynamic_range_12b, dynamic_range_12b/dynamic_range_original);
+
+%% B-scan comparison at defect location
+figure('Name', 'Method 12: B-scan Comparison at Defect Y-position');
+
+subplot(3,1,1);
+imagesc(x, t, squeeze(Data(:, defect_y, :)).');
+title(sprintf('Original B-scan at Y=%d', defect_y));
+xlabel('X position'); ylabel('Time (μs)');
+colorbar;
+hold on;
+% Mark the time gate
+plot([min(x) max(x)], [actual_toi1 actual_toi1], 'r--', 'LineWidth', 2);
+plot([min(x) max(x)], [actual_toi2 actual_toi2], 'r--', 'LineWidth', 2);
+hold off;
+
+subplot(3,1,2);
+imagesc(x, t, squeeze(Data_phase_coherence_filt(:, defect_y, :)).');
+title(sprintf('Method 12a Filtered B-scan at Y=%d', defect_y));
+xlabel('X position'); ylabel('Time (μs)');
+colorbar;
+hold on;
+plot([min(x) max(x)], [actual_toi1 actual_toi1], 'r--', 'LineWidth', 2);
+plot([min(x) max(x)], [actual_toi2 actual_toi2], 'r--', 'LineWidth', 2);
+hold off;
+
+subplot(3,1,3);
+imagesc(x, t, squeeze(Data_phase_gradient_filt(:, defect_y, :)).');
+title(sprintf('Method 12b Filtered B-scan at Y=%d', defect_y));
+xlabel('X position'); ylabel('Time (μs)');
+colorbar;
+hold on;
+plot([min(x) max(x)], [actual_toi1 actual_toi1], 'r--', 'LineWidth', 2);
+plot([min(x) max(x)], [actual_toi2 actual_toi2], 'r--', 'LineWidth', 2);
+hold off;
+
+%% ============================================================================
+%% QUANTITATIVE ANALYSIS AND STATISTICS
+%% ============================================================================
+
+fprintf('\n=== QUANTITATIVE ANALYSIS ===\n');
+
+% Signal quality metrics
+original_signal = squeeze(Data(defect_x, defect_y, :));
+filtered_12a = squeeze(Data_phase_coherence_filt(defect_x, defect_y, :));
+filtered_12b = squeeze(Data_phase_gradient_filt(defect_x, defect_y, :));
+
+% Calculate RMS values in different time regions
+main_pulse_region = i1-10:i1+10;  % Around main pulse
+post_pulse_region = i1+20:i1+100; % Post-pulse region
+
+% Ensure regions are within bounds
+main_pulse_region = main_pulse_region(main_pulse_region > 0 & main_pulse_region <= nt);
+post_pulse_region = post_pulse_region(post_pulse_region > 0 & post_pulse_region <= nt);
+
+original_main_rms = rms(original_signal(main_pulse_region));
+original_post_rms = rms(original_signal(post_pulse_region));
+
+filtered_12a_main_rms = rms(filtered_12a(main_pulse_region));
+filtered_12a_post_rms = rms(filtered_12a(post_pulse_region));
+
+filtered_12b_main_rms = rms(filtered_12b(main_pulse_region));
+filtered_12b_post_rms = rms(filtered_12b(post_pulse_region));
+
+fprintf('Signal Quality Analysis at position (%d,%d):\n', defect_x, defect_y);
+fprintf('Original     - Main pulse RMS: %.3f, Post-pulse RMS: %.3f\n', original_main_rms, original_post_rms);
+fprintf('Method 12a   - Main pulse RMS: %.3f, Post-pulse RMS: %.3f\n', filtered_12a_main_rms, filtered_12a_post_rms);
+fprintf('Method 12b   - Main pulse RMS: %.3f, Post-pulse RMS: %.3f\n', filtered_12b_main_rms, filtered_12b_post_rms);
+
+% Calculate improvement ratios
+snr_improvement_12a = (original_post_rms / filtered_12a_post_rms);
+snr_improvement_12b = (original_post_rms / filtered_12b_post_rms);
+
+fprintf('\nNoise Reduction (higher is better):\n');
+fprintf('Method 12a: %.1fx reduction in post-pulse noise\n', snr_improvement_12a);
+fprintf('Method 12b: %.1fx reduction in post-pulse noise\n', snr_improvement_12b);
+
+% Standing wave detection statistics
+total_pixels = nx * ny;
+total_frequencies = length(freq_indices);
+standing_wave_pixels = sum(standing_wave_mask(:));
+standing_wave_percentage = 100 * standing_wave_pixels / (total_pixels * total_frequencies);
+
+fprintf('\nStanding Wave Detection Statistics:\n');
+fprintf('Total pixel-frequency combinations: %d\n', total_pixels * total_frequencies);
+fprintf('Standing wave detections: %d (%.2f%%)\n', standing_wave_pixels, standing_wave_percentage);
+fprintf('Dominant frequency: %.2f MHz\n', dominant_freq_val/1e6);
+
+%% ============================================================================
+%% SUMMARY AND RECOMMENDATIONS
+%% ============================================================================
+
+fprintf('\n=== METHOD 12 ANALYSIS COMPLETE ===\n');
+fprintf('Summary:\n');
+fprintf('- Dominant standing wave frequency: %.2f MHz\n', dominant_freq_val/1e6);
+fprintf('- Maximum phase coherence: %.3f\n', max_coherence);
+fprintf('- Standing wave regions: %.2f%% of data\n', standing_wave_percentage);
+fprintf('- Method 12a noise reduction: %.1fx\n', snr_improvement_12a);
+fprintf('- Method 12b noise reduction: %.1fx\n', snr_improvement_12b);
+
+if snr_improvement_12a > 2 || snr_improvement_12b > 2
+    fprintf('\nRECOMMENDATION: Significant standing wave reduction achieved!\n');
+    if snr_improvement_12a > snr_improvement_12b
+        fprintf('Method 12a (phase coherence) shows better performance.\n');
+    else
+        fprintf('Method 12b (phase gradient) shows better performance.\n');
+    end
+else
+    fprintf('\nRECOMMENDATION: Consider adjusting frequency range or thresholds.\n');
+end
+
+fprintf('\nFiltered data available in:\n');
+fprintf('- Data_phase_coherence_filt (Method 12a)\n');
+fprintf('- Data_phase_gradient_filt (Method 12b)\n');
+fprintf('\nAnalysis variables available:\n');
+fprintf('- Phase_Data, Amplitude_Data, coherence_map\n');
+fprintf('- standing_wave_mask, phase_grad_magnitude\n');
+fprintf('- Cscan_original, Cscan_filtered_12a, Cscan_filtered_12b (time-gated C-scans)\n');
+fprintf('- TOF_original, TOF_filtered_12a, TOF_filtered_12b (time-of-flight C-scans)\n');
+
+%% Save results if desired (uncomment to save)
+% save('method12_results.mat', 'Data_phase_coherence_filt', 'Data_phase_gradient_filt', ...
+%      'Phase_Data', 'Amplitude_Data', 'coherence_map', 'standing_wave_mask', ...
+%      'dominant_freq_val', 'freq_axis', 'freq_indices', ...
+%      'Cscan_original', 'Cscan_filtered_12a', 'Cscan_filtered_12b', ...
+%      'TOF_original', 'TOF_filtered_12a', 'TOF_filtered_12b');
+
+fprintf('\nMethod 12 analysis completed successfully!\n');
