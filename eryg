@@ -621,3 +621,388 @@ fprintf('- TOF_original, TOF_filtered_12a, TOF_filtered_12b (time-of-flight C-sc
 %      'TOF_original', 'TOF_filtered_12a', 'TOF_filtered_12b');
 
 fprintf('\nMethod 12 analysis completed successfully!\n');
+
+
+fprintf('\n=== TEMPORAL STANDING WAVE ANALYSIS ===\n');
+fprintf('Scanning %d time frames for standing wave patterns...\n', nt);
+
+% Initialize arrays to store standing wave metrics for each time frame
+standing_wave_score_original = zeros(nt, 1);
+standing_wave_score_filtered_12a = zeros(nt, 1);
+standing_wave_score_filtered_12b = zeros(nt, 1);
+
+% Additional metrics for comprehensive analysis
+spatial_coherence_original = zeros(nt, 1);
+spatial_coherence_filtered_12a = zeros(nt, 1);
+spatial_coherence_filtered_12b = zeros(nt, 1);
+
+periodicity_strength_original = zeros(nt, 1);
+periodicity_strength_filtered_12a = zeros(nt, 1);
+periodicity_strength_filtered_12b = zeros(nt, 1);
+
+%% Analyze each time frame
+tic;
+for t_idx = 1:nt
+    if mod(t_idx, 100) == 0
+        fprintf('Processing frame %d/%d (%.1f%% complete, %.1fs elapsed)\n', ...
+            t_idx, nt, 100*t_idx/nt, toc);
+    end
+    
+    % Extract spatial slices at current time
+    slice_original = Data(:,:,t_idx);
+    slice_filtered_12a = Data_phase_coherence_filt(:,:,t_idx);
+    slice_filtered_12b = Data_phase_gradient_filt(:,:,t_idx);
+    
+    % Skip if slice has very low energy (no signal)
+    if max(abs(slice_original(:))) < 1e-6
+        continue;
+    end
+    
+    %% 1. Spatial FFT Analysis for Periodicity
+    % Standing waves create distinct peaks in spatial frequency domain
+    fft2_original = fft2(slice_original);
+    fft2_filtered_12a = fft2(slice_filtered_12a);
+    fft2_filtered_12b = fft2(slice_filtered_12b);
+    
+    % Calculate power spectra
+    power_original = abs(fftshift(fft2_original)).^2;
+    power_filtered_12a = abs(fftshift(fft2_filtered_12a)).^2;
+    power_filtered_12b = abs(fftshift(fft2_filtered_12b)).^2;
+    
+    % Remove DC component for better analysis
+    center_x = round(nx/2) + 1;
+    center_y = round(ny/2) + 1;
+    power_original(center_x, center_y) = 0;
+    power_filtered_12a(center_x, center_y) = 0;
+    power_filtered_12b(center_x, center_y) = 0;
+    
+    % Measure concentration of power in discrete frequencies (standing wave signature)
+    sorted_power_orig = sort(power_original(:), 'descend');
+    sorted_power_12a = sort(power_filtered_12a(:), 'descend');
+    sorted_power_12b = sort(power_filtered_12b(:), 'descend');
+    
+    % Standing wave score: ratio of top 10 peaks to total power
+    n_peaks = 10;
+    standing_wave_score_original(t_idx) = sum(sorted_power_orig(1:n_peaks)) / sum(sorted_power_orig);
+    standing_wave_score_filtered_12a(t_idx) = sum(sorted_power_12a(1:n_peaks)) / sum(sorted_power_12a);
+    standing_wave_score_filtered_12b(t_idx) = sum(sorted_power_12b(1:n_peaks)) / sum(sorted_power_12b);
+    
+    %% 2. Spatial Coherence Analysis
+    % Calculate how similar adjacent pixels are (standing waves show high coherence)
+    coherence_orig = calculate_spatial_coherence(slice_original);
+    coherence_12a = calculate_spatial_coherence(slice_filtered_12a);
+    coherence_12b = calculate_spatial_coherence(slice_filtered_12b);
+    
+    spatial_coherence_original(t_idx) = coherence_orig;
+    spatial_coherence_filtered_12a(t_idx) = coherence_12a;
+    spatial_coherence_filtered_12b(t_idx) = coherence_12b;
+    
+    %% 3. Autocorrelation-based Periodicity
+    % Detect regular spatial patterns
+    periodicity_orig = calculate_periodicity_strength(slice_original);
+    periodicity_12a = calculate_periodicity_strength(slice_filtered_12a);
+    periodicity_12b = calculate_periodicity_strength(slice_filtered_12b);
+    
+    periodicity_strength_original(t_idx) = periodicity_orig;
+    periodicity_strength_filtered_12a(t_idx) = periodicity_12a;
+    periodicity_strength_filtered_12b(t_idx) = periodicity_12b;
+end
+fprintf('Temporal analysis completed in %.1f seconds\n', toc);
+
+%% ============================================================================
+%% IDENTIFY FRAMES WITH STANDING WAVES
+%% ============================================================================
+
+% Combine metrics for robust detection
+combined_score_original = (standing_wave_score_original + ...
+                          spatial_coherence_original + ...
+                          periodicity_strength_original) / 3;
+                      
+combined_score_filtered_12a = (standing_wave_score_filtered_12a + ...
+                              spatial_coherence_filtered_12a + ...
+                              periodicity_strength_filtered_12a) / 3;
+                          
+combined_score_filtered_12b = (standing_wave_score_filtered_12b + ...
+                              spatial_coherence_filtered_12b + ...
+                              periodicity_strength_filtered_12b) / 3;
+
+% Normalize scores for comparison
+combined_score_original = combined_score_original / max(combined_score_original);
+combined_score_filtered_12a = combined_score_filtered_12a / max(combined_score_original); % Use same normalization
+combined_score_filtered_12b = combined_score_filtered_12b / max(combined_score_original);
+
+% Detect standing wave frames using adaptive threshold
+threshold = mean(combined_score_original) + 2*std(combined_score_original);
+standing_wave_frames = find(combined_score_original > threshold);
+
+fprintf('\n=== STANDING WAVE DETECTION RESULTS ===\n');
+fprintf('Threshold for standing wave detection: %.3f\n', threshold);
+fprintf('Number of frames with standing waves: %d/%d (%.1f%%)\n', ...
+    length(standing_wave_frames), nt, 100*length(standing_wave_frames)/nt);
+
+if ~isempty(standing_wave_frames)
+    fprintf('\nStanding wave detected at times:\n');
+    for i = 1:min(10, length(standing_wave_frames)) % Show first 10
+        frame_idx = standing_wave_frames(i);
+        fprintf('  Frame %d: t=%.2f μs (score=%.3f)\n', ...
+            frame_idx, t(frame_idx), combined_score_original(frame_idx));
+    end
+    if length(standing_wave_frames) > 10
+        fprintf('  ... and %d more frames\n', length(standing_wave_frames)-10);
+    end
+end
+
+%% ============================================================================
+%% VISUALIZATION OF TEMPORAL STANDING WAVE ANALYSIS
+%% ============================================================================
+
+figure('Name', 'Temporal Standing Wave Detection and Removal Verification');
+
+% Plot 1: Standing wave scores over time
+subplot(3,1,1);
+plot(t, combined_score_original, 'b-', 'LineWidth', 1.5);
+hold on;
+plot(t, combined_score_filtered_12a, 'r-', 'LineWidth', 1.5);
+plot(t, combined_score_filtered_12b, 'g-', 'LineWidth', 1.5);
+plot([min(t) max(t)], [threshold threshold], 'k--', 'LineWidth', 1);
+
+% Mark detected standing wave regions
+for i = 1:length(standing_wave_frames)
+    frame_idx = standing_wave_frames(i);
+    plot(t(frame_idx), combined_score_original(frame_idx), 'ko', ...
+        'MarkerSize', 6, 'MarkerFaceColor', 'y');
+end
+
+xlabel('Time (μs)');
+ylabel('Standing Wave Score');
+title('Standing Wave Detection Over Time');
+legend('Original', 'Method 12a Filtered', 'Method 12b Filtered', ...
+    'Detection Threshold', 'Detected SW', 'Location', 'best');
+grid on;
+xlim([min(t) max(t)]);
+
+% Plot 2: Individual metric contributions
+subplot(3,1,2);
+plot(t, standing_wave_score_original, 'b-', 'LineWidth', 1);
+hold on;
+plot(t, spatial_coherence_original, 'r-', 'LineWidth', 1);
+plot(t, periodicity_strength_original, 'g-', 'LineWidth', 1);
+xlabel('Time (μs)');
+ylabel('Metric Value');
+title('Individual Standing Wave Metrics (Original Data)');
+legend('FFT Concentration', 'Spatial Coherence', 'Periodicity', 'Location', 'best');
+grid on;
+xlim([min(t) max(t)]);
+
+% Plot 3: Removal effectiveness
+removal_effectiveness_12a = 100 * (combined_score_original - combined_score_filtered_12a) ./ ...
+                           (combined_score_original + 1e-6);
+removal_effectiveness_12b = 100 * (combined_score_original - combined_score_filtered_12b) ./ ...
+                           (combined_score_original + 1e-6);
+
+subplot(3,1,3);
+plot(t, removal_effectiveness_12a, 'r-', 'LineWidth', 1.5);
+hold on;
+plot(t, removal_effectiveness_12b, 'g-', 'LineWidth', 1.5);
+xlabel('Time (μs)');
+ylabel('Removal Effectiveness (%)');
+title('Standing Wave Removal Effectiveness Over Time');
+legend('Method 12a', 'Method 12b', 'Location', 'best');
+grid on;
+xlim([min(t) max(t)]);
+ylim([0 100]);
+
+%% ============================================================================
+%% DETAILED ANALYSIS OF PEAK STANDING WAVE FRAMES
+%% ============================================================================
+
+% Find frames with strongest standing waves
+[~, peak_frames] = sort(combined_score_original, 'descend');
+n_analyze = min(4, length(standing_wave_frames)); % Analyze top 4 frames
+
+if n_analyze > 0
+    figure('Name', 'Detailed Standing Wave Frame Analysis');
+    
+    for i = 1:n_analyze
+        frame_idx = peak_frames(i);
+        
+        % Extract slices
+        slice_orig = Data(:,:,frame_idx);
+        slice_12a = Data_phase_coherence_filt(:,:,frame_idx);
+        slice_12b = Data_phase_gradient_filt(:,:,frame_idx);
+        
+        % Row 1: Original data
+        subplot(n_analyze, 4, (i-1)*4 + 1);
+        imagesc(x, y, slice_orig.');
+        title(sprintf('Original\nt=%.1f μs', t(frame_idx)));
+        xlabel('X'); ylabel('Y');
+        colorbar; axis equal tight;
+        
+        % Row 2: FFT magnitude (to show periodic patterns)
+        subplot(n_analyze, 4, (i-1)*4 + 2);
+        fft2_slice = fftshift(abs(fft2(slice_orig)));
+        imagesc(log10(fft2_slice + 1e-6));
+        title('Log|FFT| Original');
+        colorbar; axis equal tight;
+        
+        % Row 3: Method 12a filtered
+        subplot(n_analyze, 4, (i-1)*4 + 3);
+        imagesc(x, y, slice_12a.');
+        title('Method 12a Filtered');
+        xlabel('X'); ylabel('Y');
+        colorbar; axis equal tight;
+        
+        % Row 4: Method 12b filtered
+        subplot(n_analyze, 4, (i-1)*4 + 4);
+        imagesc(x, y, slice_12b.');
+        title('Method 12b Filtered');
+        xlabel('X'); ylabel('Y');
+        colorbar; axis equal tight;
+    end
+end
+
+%% ============================================================================
+%% QUANTITATIVE VERIFICATION OF STANDING WAVE REMOVAL
+%% ============================================================================
+
+fprintf('\n=== QUANTITATIVE STANDING WAVE REMOVAL VERIFICATION ===\n');
+
+% Calculate statistics for frames with standing waves
+if ~isempty(standing_wave_frames)
+    sw_scores_original = combined_score_original(standing_wave_frames);
+    sw_scores_12a = combined_score_filtered_12a(standing_wave_frames);
+    sw_scores_12b = combined_score_filtered_12b(standing_wave_frames);
+    
+    avg_reduction_12a = mean(100 * (sw_scores_original - sw_scores_12a) ./ sw_scores_original);
+    avg_reduction_12b = mean(100 * (sw_scores_original - sw_scores_12b) ./ sw_scores_original);
+    
+    fprintf('\nFor frames with detected standing waves:\n');
+    fprintf('Average score reduction:\n');
+    fprintf('  Method 12a: %.1f%%\n', avg_reduction_12a);
+    fprintf('  Method 12b: %.1f%%\n', avg_reduction_12b);
+    
+    % Check how many frames still exceed threshold after filtering
+    remaining_sw_12a = sum(combined_score_filtered_12a > threshold);
+    remaining_sw_12b = sum(combined_score_filtered_12b > threshold);
+    
+    fprintf('\nFrames still exceeding threshold after filtering:\n');
+    fprintf('  Method 12a: %d/%d (%.1f%% removed)\n', ...
+        remaining_sw_12a, length(standing_wave_frames), ...
+        100*(1-remaining_sw_12a/length(standing_wave_frames)));
+    fprintf('  Method 12b: %d/%d (%.1f%% removed)\n', ...
+        remaining_sw_12b, length(standing_wave_frames), ...
+        100*(1-remaining_sw_12b/length(standing_wave_frames)));
+end
+
+%% ============================================================================
+%% WATERFALL PLOT FOR VISUAL CONFIRMATION
+%% ============================================================================
+
+% Select representative line for waterfall plot
+center_x = round(nx/2);
+center_y = round(ny/2);
+
+figure('Name', 'Waterfall Plot - Standing Wave Removal Verification');
+
+% Downsample for visualization
+downsample_factor = max(1, floor(nt/200)); % Show max 200 traces
+time_indices = 1:downsample_factor:nt;
+
+subplot(2,1,1);
+waterfall(x, t(time_indices), squeeze(Data(:, center_y, time_indices)).');
+title(sprintf('Original Data - Y=%d (Standing waves visible as vertical stripes)', center_y));
+xlabel('X position'); ylabel('Time (μs)'); zlabel('Amplitude');
+view([-45 30]);
+
+subplot(2,1,2);
+waterfall(x, t(time_indices), squeeze(Data_phase_coherence_filt(:, center_y, time_indices)).');
+title('Method 12a Filtered - Standing waves removed');
+xlabel('X position'); ylabel('Time (μs)'); zlabel('Amplitude');
+view([-45 30]);
+
+%% ============================================================================
+%% HELPER FUNCTIONS FOR STANDING WAVE DETECTION
+%% ============================================================================
+
+function coherence = calculate_spatial_coherence(slice)
+    % Calculate average correlation between adjacent pixels
+    
+    % Horizontal correlations
+    h_corr = 0;
+    for i = 1:size(slice,1)-1
+        row1 = slice(i,:);
+        row2 = slice(i+1,:);
+        if max(abs(row1)) > 1e-6 && max(abs(row2)) > 1e-6
+            h_corr = h_corr + abs(corrcoef(row1, row2));
+        end
+    end
+    h_corr = h_corr / (size(slice,1)-1);
+    
+    % Vertical correlations
+    v_corr = 0;
+    for j = 1:size(slice,2)-1
+        col1 = slice(:,j);
+        col2 = slice(:,j+1);
+        if max(abs(col1)) > 1e-6 && max(abs(col2)) > 1e-6
+            corr_matrix = corrcoef(col1, col2);
+            v_corr = v_corr + abs(corr_matrix(1,2));
+        end
+    end
+    v_corr = v_corr / (size(slice,2)-1);
+    
+    coherence = (h_corr + v_corr) / 2;
+end
+
+function periodicity = calculate_periodicity_strength(slice)
+    % Use autocorrelation to detect periodic patterns
+    
+    % 2D autocorrelation
+    autocorr = xcorr2(slice - mean(slice(:)));
+    
+    % Normalize
+    center_val = autocorr(size(autocorr,1)/2+0.5, size(autocorr,2)/2+0.5);
+    if abs(center_val) > 1e-6
+        autocorr = autocorr / center_val;
+    end
+    
+    % Find peaks away from center
+    center_x = size(autocorr,1)/2+0.5;
+    center_y = size(autocorr,2)/2+0.5;
+    
+    % Mask out central region
+    mask_radius = 5;
+    [X, Y] = meshgrid(1:size(autocorr,2), 1:size(autocorr,1));
+    center_mask = sqrt((X-center_x).^2 + (Y-center_y).^2) < mask_radius;
+    
+    autocorr_masked = autocorr;
+    autocorr_masked(center_mask) = 0;
+    
+    % Periodicity strength = maximum autocorrelation away from center
+    periodicity = max(abs(autocorr_masked(:)));
+end
+
+%% ============================================================================
+%% SAVE TEMPORAL ANALYSIS RESULTS
+%% ============================================================================
+
+% Create structure with temporal analysis results
+temporal_analysis = struct();
+temporal_analysis.time = t;
+temporal_analysis.combined_score_original = combined_score_original;
+temporal_analysis.combined_score_filtered_12a = combined_score_filtered_12a;
+temporal_analysis.combined_score_filtered_12b = combined_score_filtered_12b;
+temporal_analysis.standing_wave_frames = standing_wave_frames;
+temporal_analysis.threshold = threshold;
+temporal_analysis.removal_effectiveness_12a = removal_effectiveness_12a;
+temporal_analysis.removal_effectiveness_12b = removal_effectiveness_12b;
+
+fprintf('\n=== TEMPORAL ANALYSIS COMPLETE ===\n');
+fprintf('Results stored in temporal_analysis structure\n');
+fprintf('Key findings:\n');
+fprintf('- %d frames identified with standing waves\n', length(standing_wave_frames));
+fprintf('- Peak standing wave time: %.2f μs\n', t(peak_frames(1)));
+fprintf('- Best removal method: %s\n', ...
+    ifelse(avg_reduction_12a > avg_reduction_12b, 'Method 12a', 'Method 12b'));
+
+% Optional: save results
+% save('temporal_standing_wave_analysis.mat', 'temporal_analysis');
