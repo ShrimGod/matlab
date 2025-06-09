@@ -1,698 +1,625 @@
-%% Method 12 Enhanced: Comprehensive Standing Wave Removal and Verification
-% Advanced multi-scale phase coherence analysis with integrated verification
-% This script provides multiple methods to remove standing waves and
-% definitively verify their removal through various analytical approaches
+%% Advanced Standing Wave Removal with Temporal Coherence Analysis
+% This improved method identifies and removes standing waves by analyzing
+% their temporal stability - the key characteristic that distinguishes them
+% from propagating ultrasonic signals.
 %
-% INPUTS REQUIRED:
-%   Data - 3D array (nx x ny x nt) containing ultrasonic scan data
-%   x, y - spatial coordinate vectors
-%   t - time vector
-%   fs - sampling frequency (Hz)
+% Key improvements:
+% 1. Temporal coherence analysis across multiple frames
+% 2. Proper spatial windowing for standing wave patterns
+% 3. Animation capabilities for verification
+% 4. Multiple metrics to validate removal effectiveness
 %
-% OUTPUTS:
-%   Data_comprehensive_filt - Comprehensively filtered data
-%   standing_wave_analysis - Complete analysis structure
-%   Multiple verification plots and metrics
+% Author: Advanced NDT Analysis Framework
+% Date: 2024
 
-clear; clc;
+clear; clc; close all;
 
 %% ============================================================================
-%% SETUP AND PARAMETERS
+%% LOAD DATA AND PARAMETERS
 %% ============================================================================
 
-% Load your data here - uncomment and modify as needed
-% load('your_data_file.mat'); % Should contain Data, x, y, t
+fprintf('=== ADVANCED STANDING WAVE REMOVAL ===\n');
+fprintf('Loading ultrasonic data...\n');
 
-% Sampling and frequency parameters
-fs = 50e6;              % Sampling frequency (50 MHz typical)
-f_standing = 5e6;       % Expected standing wave frequency
-
-% Time gates for analysis
-toi1 = 120;             % First time of interest (μs)
-toi2 = 124;             % Second time of interest (μs)
-
-% Analysis position
-defect_x = 32;          % X position for detailed analysis
-defect_y = 60;          % Y position for detailed analysis
-
-% Enhanced phase analysis parameters
-freq_range = [2e6, 8e6];    % Wider frequency range for better detection
-coherence_scales = [3, 5, 7]; % Multi-scale coherence analysis
-phase_reduction_factor = 0.05; % Stronger reduction (5% of original)
-
-% Adaptive filtering parameters
-use_adaptive_threshold = true;  % Enable local adaptive thresholding
-local_window_size = 20;        % Window for local statistics
-coherence_sensitivity = 2.0;   % Standard deviations above mean
-
-%% ============================================================================
-%% DATA VERIFICATION AND INITIALIZATION
-%% ============================================================================
-
-% Verify data exists
-if ~exist('Data', 'var')
-    error('Data variable not found. Please load your ultrasonic data first.');
+% Load data
+[fname, location] = uigetfile({'*.mat'; '*.*'}, 'Select Ultrasonic Data File');
+if fname == 0
+    error('No file selected. Exiting.');
 end
+load(fullfile(location, fname));
+clear location fname;
 
+% Verify data dimensions and create coordinate vectors if needed
 [nx, ny, nt] = size(Data);
-fprintf('=== METHOD 12 ENHANCED: COMPREHENSIVE STANDING WAVE REMOVAL ===\n');
-fprintf('Data dimensions: %dx%dx%d\n', nx, ny, nt);
+fprintf('Data dimensions: %d x %d x %d (x, y, time)\n', nx, ny, nt);
 
-% Create coordinate vectors if needed
+if ~exist('fs', 'var')
+    fs = 50e6; % Default 50 MHz sampling rate
+    fprintf('Using default sampling frequency: %.1f MHz\n', fs/1e6);
+end
+
 if ~exist('x', 'var') || ~exist('y', 'var') || ~exist('t', 'var')
-    warning('Coordinate vectors not found. Creating default vectors.');
-    x = 0:nx-1;
-    y = 0:ny-1;
-    t = (0:nt-1) / fs * 1e6; % Convert to microseconds
+    x = 1:nx;
+    y = 1:ny;
+    t = (0:nt-1) / fs * 1e6; % Time in microseconds
+    fprintf('Generated default coordinate vectors\n');
 end
 
-fprintf('Spatial range: X=[%.2f,%.2f], Y=[%.2f,%.2f]\n', min(x), max(x), min(y), max(y));
-fprintf('Time range: %.2f to %.2f μs\n', min(t), max(t));
-
-% Calculate time indices
-[~,i1] = min(abs(t-toi1));
-[~,i2] = min(abs(t-toi2));
-actual_toi1 = t(i1);
-actual_toi2 = t(i2);
-
 %% ============================================================================
-%% ENHANCED MULTI-SCALE PHASE ANALYSIS
+%% ALGORITHM PARAMETERS
 %% ============================================================================
 
-fprintf('\n=== PERFORMING ENHANCED MULTI-SCALE PHASE ANALYSIS ===\n');
+% Temporal analysis parameters
+temporal_window = 20;        % Number of frames to analyze for temporal stability
+overlap_ratio = 0.5;        % Overlap between temporal windows
+stability_threshold = 0.85;  % Correlation threshold for standing wave detection
 
-% FFT parameters with better resolution
-zero_pad_factor = 4;  % Increased zero-padding for frequency resolution
-nfft = 2^nextpow2(nt) * zero_pad_factor;
-freq_axis = (0:nfft-1) * fs / nfft;
-freq_indices = find(freq_axis >= freq_range(1) & freq_axis <= freq_range(2));
+% Spatial analysis parameters
+spatial_window = 7;         % Larger window to capture standing wave patterns
+freq_range = [2e6, 8e6];   % Extended frequency range for analysis
 
-fprintf('Enhanced FFT length: %d (%.1fx zero-padding)\n', nfft, nfft/nt);
-fprintf('Frequency resolution: %.2f kHz\n', fs/nfft/1000);
-fprintf('Analysis frequency range: %.1f-%.1f MHz (%d bins)\n', ...
-    freq_range(1)/1e6, freq_range(2)/1e6, length(freq_indices));
+% Filtering parameters
+suppression_factor = 0.05;  % Reduce standing waves to 5% of original amplitude
+transition_width = 10;      % Smooth transition to avoid artifacts
 
-% Initialize enhanced arrays
-Phase_Data = zeros(nx, ny, length(freq_indices));
-Amplitude_Data = zeros(nx, ny, length(freq_indices));
-multi_scale_coherence = zeros(nx, ny, length(freq_indices));
+% Visualization parameters
+animation_fps = 10;         % Frames per second for animations
+time_range = [100, 140];    % Time range (μs) for detailed analysis
 
-% Compute pixel-wise FFT with windowing
-fprintf('Computing windowed FFT analysis...\n');
-window = hann(nt);  % Hann window to reduce spectral leakage
+%% ============================================================================
+%% TEMPORAL COHERENCE ANALYSIS
+%% ============================================================================
 
+fprintf('\n=== PERFORMING TEMPORAL COHERENCE ANALYSIS ===\n');
+fprintf('This identifies regions that remain stationary over time.\n');
+
+% Calculate the number of temporal analysis windows
+n_windows = floor((nt - temporal_window) / (temporal_window * (1 - overlap_ratio))) + 1;
+temporal_coherence_map = zeros(nx, ny, n_windows);
+
+% Initialize progress tracking
 tic;
-for i = 1:nx
-    if mod(i,10) == 0
-        fprintf('  Progress: %d/%d (%.1fs elapsed)\n', i, nx, toc);
-    end
-    for j = 1:ny
-        % Apply window to signal
-        signal = squeeze(Data(i,j,:)) .* window;
-        
-        % Compute FFT with zero-padding
-        fft_signal = fft(signal, nfft);
-        
-        % Extract phase and amplitude in frequency range
-        fft_roi = fft_signal(freq_indices);
-        Phase_Data(i,j,:) = angle(fft_roi);
-        Amplitude_Data(i,j,:) = abs(fft_roi);
-    end
-end
-fprintf('FFT computation completed in %.1f seconds\n', toc);
+total_operations = n_windows * nx * ny;
+operations_done = 0;
 
-%% ============================================================================
-%% MULTI-SCALE PHASE COHERENCE ANALYSIS
-%% ============================================================================
+fprintf('Analyzing %d temporal windows...\n', n_windows);
 
-fprintf('\n=== COMPUTING MULTI-SCALE PHASE COHERENCE ===\n');
-
-tic;
-for scale_idx = 1:length(coherence_scales)
-    window_size = coherence_scales(scale_idx);
-    half_window = floor(window_size/2);
+for w = 1:n_windows
+    % Define the time window indices
+    start_idx = round(1 + (w-1) * temporal_window * (1 - overlap_ratio));
+    end_idx = min(start_idx + temporal_window - 1, nt);
     
-    fprintf('Processing scale %d/%d (window size %dx%d)...\n', ...
-        scale_idx, length(coherence_scales), window_size, window_size);
+    if end_idx > nt
+        break;
+    end
     
-    for f = 1:length(freq_indices)
-        if mod(f,20) == 0 && scale_idx == 1
-            fprintf('  Frequency %d/%d\n', f, length(freq_indices));
-        end
-        
-        phase_slice = Phase_Data(:,:,f);
-        
-        % Compute coherence at this scale
-        for i = half_window+1:nx-half_window
-            for j = half_window+1:ny-half_window
-                % Extract neighborhood
-                neighborhood = phase_slice(i-half_window:i+half_window, ...
-                                         j-half_window:j+half_window);
-                
-                % Calculate circular variance (more appropriate for phase)
-                exp_phases = exp(1i * neighborhood(:));
-                R = abs(mean(exp_phases));  % Resultant vector length
-                circular_variance = 1 - R;
-                
-                % Accumulate coherence (inverse variance)
-                multi_scale_coherence(i,j,f) = multi_scale_coherence(i,j,f) + ...
-                    1/(circular_variance + 1e-6);
-            end
-        end
-    end
-end
-
-% Normalize by number of scales
-multi_scale_coherence = multi_scale_coherence / length(coherence_scales);
-fprintf('Multi-scale coherence analysis completed in %.1f seconds\n', toc);
-
-%% ============================================================================
-%% ADAPTIVE THRESHOLD CALCULATION
-%% ============================================================================
-
-fprintf('\n=== CALCULATING ADAPTIVE THRESHOLDS ===\n');
-
-standing_wave_mask_adaptive = zeros(nx, ny, length(freq_indices));
-
-if use_adaptive_threshold
-    fprintf('Using local adaptive thresholding (window size: %d)\n', local_window_size);
+    fprintf('Window %d/%d: frames %d-%d\n', w, n_windows, start_idx, end_idx);
     
-    for f = 1:length(freq_indices)
-        coherence_slice = multi_scale_coherence(:,:,f);
-        
-        % Pad for edge handling
-        padded_coherence = padarray(coherence_slice, [local_window_size local_window_size], 'replicate');
-        
-        for i = 1:nx
-            for j = 1:ny
-                % Extract local window
-                local_window = padded_coherence(i:i+2*local_window_size, j:j+2*local_window_size);
-                
-                % Calculate robust statistics (median/MAD more robust than mean/std)
-                local_median = median(local_window(:));
-                local_mad = median(abs(local_window(:) - local_median));
-                
-                % Set adaptive threshold
-                adaptive_threshold = local_median + coherence_sensitivity * 1.4826 * local_mad;
-                
-                % Create mask
-                standing_wave_mask_adaptive(i,j,f) = coherence_slice(i,j) > adaptive_threshold;
-            end
-        end
-    end
-else
-    % Fall back to global percentile
-    for f = 1:length(freq_indices)
-        threshold = prctile(multi_scale_coherence(:,:,f), 85);
-        standing_wave_mask_adaptive(:,:,f) = multi_scale_coherence(:,:,f) > threshold;
-    end
-end
-
-%% ============================================================================
-%% FIND DOMINANT STANDING WAVE CHARACTERISTICS
-%% ============================================================================
-
-fprintf('\n=== IDENTIFYING STANDING WAVE CHARACTERISTICS ===\n');
-
-% Analyze frequency content with coherence weighting
-avg_amplitude = squeeze(mean(mean(Amplitude_Data, 1), 2));
-avg_coherence = squeeze(mean(mean(multi_scale_coherence, 1), 2));
-
-% Weight amplitude by coherence to find standing wave frequencies
-weighted_spectrum = avg_amplitude .* avg_coherence;
-[~, dominant_freq_idx] = max(weighted_spectrum);
-dominant_freq_val = freq_axis(freq_indices(dominant_freq_idx));
-
-% Find spatial wavelength of standing wave
-dominant_phase = Phase_Data(:,:,dominant_freq_idx);
-[phase_grad_x, phase_grad_y] = gradient(dominant_phase);
-
-% Calculate average spatial wavelength
-avg_grad_x = mean(abs(phase_grad_x(:)));
-avg_grad_y = mean(abs(phase_grad_y(:)));
-spatial_wavelength_x = 2*pi / avg_grad_x;
-spatial_wavelength_y = 2*pi / avg_grad_y;
-
-fprintf('Dominant standing wave frequency: %.2f MHz\n', dominant_freq_val/1e6);
-fprintf('Spatial wavelengths: X=%.2f mm, Y=%.2f mm\n', spatial_wavelength_x, spatial_wavelength_y);
-fprintf('Standing wave detection: %.1f%% of pixel-frequencies\n', ...
-    100*sum(standing_wave_mask_adaptive(:))/numel(standing_wave_mask_adaptive));
-
-%% ============================================================================
-%% COMPREHENSIVE FILTERING
-%% ============================================================================
-
-fprintf('\n=== APPLYING COMPREHENSIVE FILTERING ===\n');
-
-Data_comprehensive_filt = zeros(size(Data));
-
-% Apply frequency-domain filtering with smooth transitions
-tic;
-fprintf('Applying adaptive frequency-domain filtering...\n');
-
-for i = 1:nx
-    if mod(i,10) == 0
-        fprintf('  Progress: %d/%d (%.1fs elapsed)\n', i, nx, toc);
-    end
-    for j = 1:ny
-        signal = squeeze(Data(i,j,:));
-        fft_signal = fft(signal, nfft);
-        
-        % Apply smooth suppression instead of hard cutoff
-        for f = 1:length(freq_indices)
-            freq_idx = freq_indices(f);
+    % Analyze each spatial position
+    for i = 1:nx
+        for j = 1:ny
+            % Extract the temporal signal at this position
+            temporal_signal = squeeze(Data(i, j, start_idx:end_idx));
             
-            if standing_wave_mask_adaptive(i,j,f)
-                % Calculate suppression factor based on coherence strength
-                coherence_strength = multi_scale_coherence(i,j,f);
-                max_coherence = max(multi_scale_coherence(:));
-                
-                % Smooth suppression: stronger coherence = stronger suppression
-                suppression = phase_reduction_factor + ...
-                    (1 - phase_reduction_factor) * (1 - coherence_strength/max_coherence);
-                
-                % Apply suppression
-                fft_signal(freq_idx) = fft_signal(freq_idx) * suppression;
-                
-                % Handle conjugate symmetry
-                if freq_idx > 1 && freq_idx <= nfft/2
-                    conj_idx = nfft - freq_idx + 2;
-                    fft_signal(conj_idx) = fft_signal(conj_idx) * suppression;
-                end
+            % Calculate temporal stability using autocorrelation
+            % Standing waves will show high correlation between frames
+            correlations = zeros(length(temporal_signal)-1, 1);
+            
+            for k = 1:length(temporal_signal)-1
+                % Compare consecutive frames
+                r = corrcoef(temporal_signal(k), temporal_signal(k+1));
+                correlations(k) = r(1,2);
+            end
+            
+            % High mean correlation indicates temporal stability (standing wave)
+            temporal_coherence_map(i, j, w) = mean(correlations);
+            
+            operations_done = operations_done + 1;
+            if mod(operations_done, 1000) == 0
+                elapsed = toc;
+                progress = operations_done / total_operations * 100;
+                fprintf('  Progress: %.1f%% (%.1f seconds elapsed)\n', progress, elapsed);
             end
         end
-        
-        % Reconstruct with proper windowing compensation
-        filtered_signal = real(ifft(fft_signal));
-        Data_comprehensive_filt(i,j,:) = filtered_signal(1:nt) ./ window;
     end
 end
-fprintf('Comprehensive filtering completed in %.1f seconds\n', toc);
 
-%% ============================================================================
-%% TEMPORAL STANDING WAVE ANALYSIS FOR VERIFICATION
-%% ============================================================================
-
-fprintf('\n=== PERFORMING TEMPORAL VERIFICATION ANALYSIS ===\n');
-
-% Initialize temporal analysis arrays
-n_frames = nt;
-sw_score_original = zeros(n_frames, 1);
-sw_score_filtered = zeros(n_frames, 1);
-spatial_periodicity_original = zeros(n_frames, 1);
-spatial_periodicity_filtered = zeros(n_frames, 1);
-
-% Analyze each time frame
-fprintf('Analyzing %d time frames...\n', n_frames);
-tic;
-
-for t_idx = 1:n_frames
-    if mod(t_idx, 100) == 0
-        fprintf('  Frame %d/%d (%.1fs elapsed)\n', t_idx, n_frames, toc);
-    end
-    
-    % Extract spatial slices
-    slice_original = Data(:,:,t_idx);
-    slice_filtered = Data_comprehensive_filt(:,:,t_idx);
-    
-    % Skip low-energy frames
-    if max(abs(slice_original(:))) < 1e-6
-        continue;
-    end
-    
-    % Compute 2D spatial FFT
-    fft2_original = fft2(slice_original);
-    fft2_filtered = fft2(slice_filtered);
-    
-    % Calculate power spectra
-    power_original = abs(fftshift(fft2_original)).^2;
-    power_filtered = abs(fftshift(fft2_filtered)).^2;
-    
-    % Remove DC component
-    center_x = round(nx/2) + 1;
-    center_y = round(ny/2) + 1;
-    power_original(center_x, center_y) = 0;
-    power_filtered(center_x, center_y) = 0;
-    
-    % Calculate concentration metric (standing wave indicator)
-    sorted_power_orig = sort(power_original(:), 'descend');
-    sorted_power_filt = sort(power_filtered(:), 'descend');
-    
-    % Top 10 peaks concentration
-    n_peaks = 10;
-    if length(sorted_power_orig) >= n_peaks
-        sw_score_original(t_idx) = sum(sorted_power_orig(1:n_peaks)) / sum(sorted_power_orig);
-        sw_score_filtered(t_idx) = sum(sorted_power_filt(1:n_peaks)) / sum(sorted_power_filt);
-    end
-    
-    % Calculate spatial periodicity using autocorrelation
-    spatial_periodicity_original(t_idx) = calculate_enhanced_periodicity(slice_original);
-    spatial_periodicity_filtered(t_idx) = calculate_enhanced_periodicity(slice_filtered);
-end
-
+% Combine temporal windows to create overall standing wave probability map
+standing_wave_probability = mean(temporal_coherence_map, 3);
 fprintf('Temporal analysis completed in %.1f seconds\n', toc);
 
 %% ============================================================================
-%% COMPREHENSIVE VERIFICATION METRICS
+%% FREQUENCY-DOMAIN TEMPORAL ANALYSIS
 %% ============================================================================
 
-fprintf('\n=== COMPUTING COMPREHENSIVE VERIFICATION METRICS ===\n');
+fprintf('\n=== FREQUENCY-DOMAIN TEMPORAL TRACKING ===\n');
+fprintf('Analyzing phase evolution over time at key frequencies.\n');
 
-% 1. Time-domain energy distribution
-energy_original = squeeze(sum(sum(abs(Data).^2, 1), 2));
-energy_filtered = squeeze(sum(sum(abs(Data_comprehensive_filt).^2, 1), 2));
-energy_ratio = energy_filtered ./ (energy_original + 1e-10);
+% Setup frequency analysis
+nfft = 2^nextpow2(nt);
+freq_axis = (0:nfft-1) * fs / nfft;
+freq_indices = find(freq_axis >= freq_range(1) & freq_axis <= freq_range(2));
 
-% 2. Frequency domain concentration
-freq_concentration_orig = mean(sw_score_original(sw_score_original > 0));
-freq_concentration_filt = mean(sw_score_filtered(sw_score_filtered > 0));
-concentration_reduction = 100 * (freq_concentration_orig - freq_concentration_filt) / freq_concentration_orig;
+% Analyze temporal phase evolution
+phase_stability_map = zeros(nx, ny);
 
-% 3. Spatial correlation analysis
-spatial_corr_orig = calculate_spatial_correlation_map(Data);
-spatial_corr_filt = calculate_spatial_correlation_map(Data_comprehensive_filt);
-correlation_reduction = 100 * (mean(spatial_corr_orig(:)) - mean(spatial_corr_filt(:))) / mean(spatial_corr_orig(:));
-
-% 4. Phase stability analysis
-phase_stability_orig = calculate_phase_stability(Data, fs);
-phase_stability_filt = calculate_phase_stability(Data_comprehensive_filt, fs);
-stability_reduction = 100 * (mean(phase_stability_orig(:)) - mean(phase_stability_filt(:))) / mean(phase_stability_orig(:));
-
-fprintf('\nVERIFICATION METRICS:\n');
-fprintf('1. Frequency Concentration Reduction: %.1f%%\n', concentration_reduction);
-fprintf('2. Spatial Correlation Reduction: %.1f%%\n', correlation_reduction);
-fprintf('3. Phase Stability Reduction: %.1f%%\n', stability_reduction);
-fprintf('4. Energy Preservation: %.1f%% ± %.1f%%\n', mean(energy_ratio)*100, std(energy_ratio)*100);
+tic;
+for i = 1:nx
+    if mod(i, 10) == 0
+        fprintf('Processing row %d/%d\n', i, nx);
+    end
+    
+    for j = 1:ny
+        % Extract full temporal signal
+        signal = squeeze(Data(i, j, :));
+        
+        % Divide into segments for phase tracking
+        segment_length = 50;  % Frames per segment
+        n_segments = floor(nt / segment_length);
+        
+        phase_variations = [];
+        
+        for seg = 1:n_segments-1
+            % Extract consecutive segments
+            seg1_start = (seg-1) * segment_length + 1;
+            seg1_end = seg * segment_length;
+            seg2_start = seg * segment_length + 1;
+            seg2_end = min((seg+1) * segment_length, nt);
+            
+            segment1 = signal(seg1_start:seg1_end);
+            segment2 = signal(seg2_start:seg2_end);
+            
+            % FFT of each segment
+            fft1 = fft(segment1, nfft);
+            fft2 = fft(segment2, nfft);
+            
+            % Extract phases in frequency range
+            phases1 = angle(fft1(freq_indices));
+            phases2 = angle(fft2(freq_indices));
+            
+            % Calculate phase difference (accounting for wrapping)
+            phase_diff = angle(exp(1i * (phases2 - phases1)));
+            
+            % Standing waves should have minimal phase change
+            phase_variations = [phase_variations; std(phase_diff)];
+        end
+        
+        % Low phase variation indicates standing wave
+        phase_stability_map(i, j) = 1 / (mean(phase_variations) + 0.01);
+    end
+end
+fprintf('Frequency-domain analysis completed in %.1f seconds\n', toc);
 
 %% ============================================================================
-%% VISUALIZATION: COMPREHENSIVE VERIFICATION
+%% COMBINED STANDING WAVE DETECTION
 %% ============================================================================
 
-% Figure 1: Temporal Standing Wave Analysis
-figure('Name', 'Temporal Standing Wave Verification', 'Position', [50, 50, 1400, 900]);
+fprintf('\n=== COMBINING DETECTION METHODS ===\n');
 
-subplot(3,2,1);
-plot(t, sw_score_original, 'b-', 'LineWidth', 1.5);
-hold on;
-plot(t, sw_score_filtered, 'r-', 'LineWidth', 1.5);
-xlabel('Time (μs)'); ylabel('SW Score');
-title('Standing Wave Score Over Time');
+% Normalize both maps to [0, 1]
+standing_wave_probability_norm = (standing_wave_probability - min(standing_wave_probability(:))) / ...
+    (max(standing_wave_probability(:)) - min(standing_wave_probability(:)));
+
+phase_stability_norm = (phase_stability_map - min(phase_stability_map(:))) / ...
+    (max(phase_stability_map(:)) - min(phase_stability_map(:)));
+
+% Combine both metrics with weighting
+% Temporal coherence is more reliable, so we weight it higher
+combined_standing_wave_map = 0.7 * standing_wave_probability_norm + 0.3 * phase_stability_norm;
+
+% Create binary mask using adaptive thresholding
+threshold = stability_threshold * max(combined_standing_wave_map(:));
+standing_wave_mask = combined_standing_wave_map > threshold;
+
+% Apply morphological operations to clean up the mask
+standing_wave_mask = imclose(standing_wave_mask, ones(3, 3));
+standing_wave_mask = imopen(standing_wave_mask, ones(3, 3));
+
+fprintf('Detected standing waves in %.1f%% of spatial positions\n', ...
+    100 * sum(standing_wave_mask(:)) / numel(standing_wave_mask));
+
+%% ============================================================================
+%% ADVANCED FILTERING WITH SMOOTH TRANSITIONS
+%% ============================================================================
+
+fprintf('\n=== APPLYING ADVANCED FILTERING ===\n');
+fprintf('Using frequency-selective suppression with smooth transitions.\n');
+
+Data_filtered = zeros(size(Data));
+
+tic;
+for i = 1:nx
+    if mod(i, 10) == 0
+        elapsed = toc;
+        fprintf('Filtering progress: %d/%d rows (%.1f seconds)\n', i, nx, elapsed);
+    end
+    
+    for j = 1:ny
+        signal = squeeze(Data(i, j, :));
+        
+        if standing_wave_mask(i, j)
+            % This position contains standing waves
+            
+            % Perform spectral subtraction
+            fft_signal = fft(signal, nfft);
+            
+            % Estimate standing wave spectrum from stable periods
+            % Use the most stable temporal window
+            [~, most_stable_window] = max(temporal_coherence_map(i, j, :));
+            stable_start = round(1 + (most_stable_window-1) * temporal_window * (1 - overlap_ratio));
+            stable_end = min(stable_start + temporal_window - 1, nt);
+            
+            stable_segment = signal(stable_start:stable_end);
+            standing_wave_spectrum = fft(stable_segment, nfft);
+            
+            % Subtract standing wave component with frequency-dependent weighting
+            for k = 1:length(freq_indices)
+                freq_idx = freq_indices(k);
+                
+                % Calculate suppression weight based on phase stability
+                weight = 1 - suppression_factor;  % How much to keep
+                
+                % Apply suppression
+                fft_signal(freq_idx) = fft_signal(freq_idx) - ...
+                    (1 - weight) * standing_wave_spectrum(freq_idx);
+                
+                % Maintain conjugate symmetry
+                if freq_idx > 1 && freq_idx <= nfft/2
+                    fft_signal(nfft - freq_idx + 2) = conj(fft_signal(freq_idx));
+                end
+            end
+            
+            % Reconstruct signal
+            filtered_signal = real(ifft(fft_signal));
+            Data_filtered(i, j, :) = filtered_signal(1:nt);
+        else
+            % No standing waves detected - preserve original signal
+            Data_filtered(i, j, :) = signal;
+        end
+    end
+end
+
+% Apply spatial smoothing at boundaries to prevent artifacts
+fprintf('Applying boundary smoothing...\n');
+for k = 1:nt
+    slice = Data_filtered(:, :, k);
+    mask_dilated = imdilate(standing_wave_mask, ones(transition_width));
+    mask_eroded = imerode(standing_wave_mask, ones(transition_width/2));
+    transition_region = mask_dilated & ~mask_eroded;
+    
+    if any(transition_region(:))
+        % Smooth transition region
+        slice_smooth = imgaussfilt(slice, 2);
+        slice(transition_region) = slice_smooth(transition_region);
+        Data_filtered(:, :, k) = slice;
+    end
+end
+
+fprintf('Filtering completed in %.1f seconds\n', toc);
+
+%% ============================================================================
+%% VERIFICATION METRICS
+%% ============================================================================
+
+fprintf('\n=== CALCULATING VERIFICATION METRICS ===\n');
+
+% Metric 1: Temporal Variance Reduction
+temporal_variance_original = zeros(nx, ny);
+temporal_variance_filtered = zeros(nx, ny);
+
+for i = 1:nx
+    for j = 1:ny
+        % Calculate variance over time
+        temporal_variance_original(i, j) = var(squeeze(Data(i, j, :)));
+        temporal_variance_filtered(i, j) = var(squeeze(Data_filtered(i, j, :)));
+    end
+end
+
+% Standing wave regions should show significant variance reduction
+variance_reduction = 1 - temporal_variance_filtered ./ (temporal_variance_original + eps);
+variance_reduction_sw = variance_reduction(standing_wave_mask);
+variance_reduction_other = variance_reduction(~standing_wave_mask);
+
+fprintf('\nTemporal Variance Reduction:\n');
+fprintf('- In standing wave regions: %.1f%% ± %.1f%%\n', ...
+    100*mean(variance_reduction_sw), 100*std(variance_reduction_sw));
+fprintf('- In other regions: %.1f%% ± %.1f%%\n', ...
+    100*mean(variance_reduction_other), 100*std(variance_reduction_other));
+
+% Metric 2: Frequency Content Analysis
+fprintf('\nAnalyzing frequency content changes...\n');
+
+% Select representative positions
+sw_positions = find(standing_wave_mask(:));
+if length(sw_positions) > 10
+    sw_positions = sw_positions(randperm(length(sw_positions), 10));
+end
+
+avg_spectrum_original = zeros(nfft/2, 1);
+avg_spectrum_filtered = zeros(nfft/2, 1);
+
+for idx = sw_positions'
+    [i, j] = ind2sub([nx, ny], idx);
+    
+    original_spectrum = abs(fft(squeeze(Data(i, j, :)), nfft));
+    filtered_spectrum = abs(fft(squeeze(Data_filtered(i, j, :)), nfft));
+    
+    avg_spectrum_original = avg_spectrum_original + original_spectrum(1:nfft/2);
+    avg_spectrum_filtered = avg_spectrum_filtered + filtered_spectrum(1:nfft/2);
+end
+
+avg_spectrum_original = avg_spectrum_original / length(sw_positions);
+avg_spectrum_filtered = avg_spectrum_filtered / length(sw_positions);
+
+% Metric 3: Signal-to-Noise Ratio Improvement
+% Define signal and noise regions based on time
+[~, signal_start] = min(abs(t - time_range(1)));
+[~, signal_end] = min(abs(t - time_range(2)));
+noise_region = signal_end+50:min(signal_end+200, nt);
+
+snr_improvement = zeros(nx, ny);
+for i = 1:nx
+    for j = 1:ny
+        % Original SNR
+        signal_power_orig = mean(Data(i, j, signal_start:signal_end).^2);
+        noise_power_orig = mean(Data(i, j, noise_region).^2);
+        snr_orig = 10*log10(signal_power_orig / (noise_power_orig + eps));
+        
+        % Filtered SNR
+        signal_power_filt = mean(Data_filtered(i, j, signal_start:signal_end).^2);
+        noise_power_filt = mean(Data_filtered(i, j, noise_region).^2);
+        snr_filt = 10*log10(signal_power_filt / (noise_power_filt + eps));
+        
+        snr_improvement(i, j) = snr_filt - snr_orig;
+    end
+end
+
+fprintf('\nSignal-to-Noise Ratio Improvement:\n');
+fprintf('- Average: %.1f dB\n', mean(snr_improvement(:)));
+fprintf('- In standing wave regions: %.1f dB\n', mean(snr_improvement(standing_wave_mask)));
+
+%% ============================================================================
+%% VISUALIZATION - STATIC PLOTS
+%% ============================================================================
+
+fprintf('\n=== GENERATING ANALYSIS PLOTS ===\n');
+
+% Figure 1: Detection Results
+figure('Name', 'Standing Wave Detection Results', 'Position', [50, 50, 1400, 900]);
+
+subplot(2, 3, 1);
+imagesc(x, y, standing_wave_probability.');
+title('Temporal Coherence Map');
+xlabel('X Position'); ylabel('Y Position');
+colorbar; colormap(gca, 'hot'); axis equal tight;
+cb = colorbar; ylabel(cb, 'Temporal Stability');
+
+subplot(2, 3, 2);
+imagesc(x, y, phase_stability_map.');
+title('Phase Stability Map');
+xlabel('X Position'); ylabel('Y Position');
+colorbar; colormap(gca, 'hot'); axis equal tight;
+cb = colorbar; ylabel(cb, 'Phase Stability');
+
+subplot(2, 3, 3);
+imagesc(x, y, combined_standing_wave_map.');
+title('Combined Detection Map');
+xlabel('X Position'); ylabel('Y Position');
+colorbar; colormap(gca, 'parula'); axis equal tight;
+cb = colorbar; ylabel(cb, 'Standing Wave Probability');
+
+subplot(2, 3, 4);
+imagesc(x, y, standing_wave_mask.');
+title('Standing Wave Mask (Binary)');
+xlabel('X Position'); ylabel('Y Position');
+colormap(gca, 'gray'); axis equal tight;
+
+subplot(2, 3, 5);
+imagesc(x, y, variance_reduction.' * 100);
+title('Temporal Variance Reduction (%)');
+xlabel('X Position'); ylabel('Y Position');
+colorbar; colormap(gca, 'jet'); axis equal tight;
+cb = colorbar; ylabel(cb, 'Reduction (%)');
+caxis([0, 100]);
+
+subplot(2, 3, 6);
+freq_plot = freq_axis(1:nfft/2) / 1e6;
+plot(freq_plot, avg_spectrum_original, 'b-', 'LineWidth', 1.5); hold on;
+plot(freq_plot, avg_spectrum_filtered, 'r-', 'LineWidth', 1.5);
+xlabel('Frequency (MHz)'); ylabel('Average Amplitude');
+title('Frequency Content in Standing Wave Regions');
 legend('Original', 'Filtered', 'Location', 'best');
+xlim([0, fs/2e6]);
 grid on;
 
-subplot(3,2,2);
-plot(t, spatial_periodicity_original, 'b-', 'LineWidth', 1.5);
-hold on;
-plot(t, spatial_periodicity_filtered, 'r-', 'LineWidth', 1.5);
-xlabel('Time (μs)'); ylabel('Periodicity');
-title('Spatial Periodicity Over Time');
-legend('Original', 'Filtered', 'Location', 'best');
-grid on;
+% Figure 2: Time Domain Comparison
+figure('Name', 'Time Domain Analysis', 'Position', [100, 100, 1400, 600]);
 
-subplot(3,2,3);
-removal_effectiveness = 100 * (sw_score_original - sw_score_filtered) ./ (sw_score_original + 1e-6);
-plot(t, removal_effectiveness, 'g-', 'LineWidth', 1.5);
-xlabel('Time (μs)'); ylabel('Removal (%)');
-title('Standing Wave Removal Effectiveness');
-ylim([0 100]);
-grid on;
+% Find a representative standing wave position
+[max_sw_prob, max_idx] = max(combined_standing_wave_map(:));
+[sw_x, sw_y] = ind2sub([nx, ny], max_idx);
 
-subplot(3,2,4);
-plot(t, energy_ratio, 'k-', 'LineWidth', 1.5);
-xlabel('Time (μs)'); ylabel('Energy Ratio');
-title('Energy Preservation (Filtered/Original)');
-ylim([0.8 1.2]);
-grid on;
-
-subplot(3,2,5);
-histogram(sw_score_original(sw_score_original > 0), 50, 'FaceColor', 'b', 'FaceAlpha', 0.5);
-hold on;
-histogram(sw_score_filtered(sw_score_filtered > 0), 50, 'FaceColor', 'r', 'FaceAlpha', 0.5);
-xlabel('SW Score'); ylabel('Count');
-title('Distribution of Standing Wave Scores');
-legend('Original', 'Filtered');
-
-subplot(3,2,6);
-scatter(sw_score_original, sw_score_filtered, 10, 'filled');
-hold on;
-plot([0 max(sw_score_original)], [0 max(sw_score_original)], 'r--', 'LineWidth', 1);
-xlabel('Original SW Score'); ylabel('Filtered SW Score');
-title('Score Correlation (Below Line = Improvement)');
-grid on;
-
-% Figure 2: Spatial Analysis
-figure('Name', 'Spatial Standing Wave Verification', 'Position', [100, 100, 1400, 800]);
-
-% Select frame with strong standing wave
-[~, max_sw_frame] = max(sw_score_original);
-
-subplot(2,3,1);
-imagesc(x, y, Data(:,:,max_sw_frame).');
-title(sprintf('Original at t=%.1f μs', t(max_sw_frame)));
-xlabel('X'); ylabel('Y');
-colorbar; axis equal tight;
-
-subplot(2,3,2);
-imagesc(x, y, Data_comprehensive_filt(:,:,max_sw_frame).');
-title('Filtered');
-xlabel('X'); ylabel('Y');
-colorbar; axis equal tight;
-
-subplot(2,3,3);
-diff_image = Data(:,:,max_sw_frame) - Data_comprehensive_filt(:,:,max_sw_frame);
-imagesc(x, y, diff_image.');
-title('Removed Component');
-xlabel('X'); ylabel('Y');
-colorbar; axis equal tight;
-
-subplot(2,3,4);
-fft2_orig = fftshift(abs(fft2(Data(:,:,max_sw_frame))));
-imagesc(log10(fft2_orig + 1e-6));
-title('Original |FFT|');
-colorbar; axis equal tight;
-
-subplot(2,3,5);
-fft2_filt = fftshift(abs(fft2(Data_comprehensive_filt(:,:,max_sw_frame))));
-imagesc(log10(fft2_filt + 1e-6));
-title('Filtered |FFT|');
-colorbar; axis equal tight;
-
-subplot(2,3,6);
-imagesc(log10(abs(fft2_orig - fft2_filt) + 1e-6));
-title('|FFT| Difference');
-colorbar; axis equal tight;
-
-% Figure 3: A-scan and B-scan Comparison
-figure('Name', 'A-scan and B-scan Verification', 'Position', [150, 150, 1200, 800]);
-
-subplot(2,2,1);
-plot(t, squeeze(Data(defect_x, defect_y, :)), 'b-', 'LineWidth', 1.5);
-hold on;
-plot(t, squeeze(Data_comprehensive_filt(defect_x, defect_y, :)), 'r-', 'LineWidth', 1.5);
+subplot(1, 2, 1);
+plot(t, squeeze(Data(sw_x, sw_y, :)), 'b-', 'LineWidth', 1.5); hold on;
+plot(t, squeeze(Data_filtered(sw_x, sw_y, :)), 'r-', 'LineWidth', 1.5);
 xlabel('Time (μs)'); ylabel('Amplitude');
-title(sprintf('A-scan at (%d,%d)', defect_x, defect_y));
+title(sprintf('A-scan at Standing Wave Position (%d, %d)', sw_x, sw_y));
 legend('Original', 'Filtered', 'Location', 'best');
 grid on;
+xlim([t(1), t(end)]);
 
-subplot(2,2,2);
-original_fft = abs(fft(squeeze(Data(defect_x, defect_y, :))));
-filtered_fft = abs(fft(squeeze(Data_comprehensive_filt(defect_x, defect_y, :))));
-freq_axis_plot = (0:length(original_fft)-1) * fs / length(original_fft) / 1e6;
-plot(freq_axis_plot(1:round(end/2)), original_fft(1:round(end/2)), 'b-', 'LineWidth', 1.5);
-hold on;
-plot(freq_axis_plot(1:round(end/2)), filtered_fft(1:round(end/2)), 'r-', 'LineWidth', 1.5);
-xlabel('Frequency (MHz)'); ylabel('Magnitude');
-title('Frequency Spectrum');
-legend('Original', 'Filtered');
-xlim([0 10]);
+% Find a position without standing waves for comparison
+non_sw_mask = ~standing_wave_mask;
+[i_non_sw, j_non_sw] = find(non_sw_mask, 1);
+
+subplot(1, 2, 2);
+plot(t, squeeze(Data(i_non_sw, j_non_sw, :)), 'b-', 'LineWidth', 1.5); hold on;
+plot(t, squeeze(Data_filtered(i_non_sw, j_non_sw, :)), 'r-', 'LineWidth', 1.5);
+xlabel('Time (μs)'); ylabel('Amplitude');
+title(sprintf('A-scan at Non-Standing Wave Position (%d, %d)', i_non_sw, j_non_sw));
+legend('Original', 'Filtered', 'Location', 'best');
 grid on;
-
-subplot(2,2,3);
-imagesc(x, t, squeeze(Data(:, defect_y, :)).');
-title(sprintf('Original B-scan at Y=%d', defect_y));
-xlabel('X position'); ylabel('Time (μs)');
-colorbar; caxis([-1 1]*max(abs(Data(:)))*0.5);
-
-subplot(2,2,4);
-imagesc(x, t, squeeze(Data_comprehensive_filt(:, defect_y, :)).');
-title('Filtered B-scan');
-xlabel('X position'); ylabel('Time (μs)');
-colorbar; caxis([-1 1]*max(abs(Data(:)))*0.5);
-
-% Figure 4: Advanced Verification - Autocorrelation
-figure('Name', 'Autocorrelation Verification', 'Position', [200, 200, 1200, 600]);
-
-% Compute 2D autocorrelation for a representative time slice
-time_slice = round(nt/2);
-autocorr_orig = xcorr2(Data(:,:,time_slice) - mean(mean(Data(:,:,time_slice))));
-autocorr_filt = xcorr2(Data_comprehensive_filt(:,:,time_slice) - mean(mean(Data_comprehensive_filt(:,:,time_slice))));
-
-% Normalize
-autocorr_orig = autocorr_orig / max(autocorr_orig(:));
-autocorr_filt = autocorr_filt / max(autocorr_filt(:));
-
-% Extract central region
-center = size(autocorr_orig)/2;
-range = 30;
-
-subplot(1,3,1);
-imagesc(autocorr_orig(center(1)-range:center(1)+range, center(2)-range:center(2)+range));
-title('Original Autocorrelation');
-colorbar; axis equal tight;
-
-subplot(1,3,2);
-imagesc(autocorr_filt(center(1)-range:center(1)+range, center(2)-range:center(2)+range));
-title('Filtered Autocorrelation');
-colorbar; axis equal tight;
-
-subplot(1,3,3);
-% Radial average
-[X, Y] = meshgrid(-range:range, -range:range);
-R = sqrt(X.^2 + Y.^2);
-radial_bins = 0:range;
-radial_orig = zeros(size(radial_bins));
-radial_filt = zeros(size(radial_bins));
-
-for r = 1:length(radial_bins)-1
-    mask = (R >= radial_bins(r)) & (R < radial_bins(r+1));
-    region_orig = autocorr_orig(center(1)-range:center(1)+range, center(2)-range:center(2)+range);
-    region_filt = autocorr_filt(center(1)-range:center(1)+range, center(2)-range:center(2)+range);
-    radial_orig(r) = mean(region_orig(mask));
-    radial_filt(r) = mean(region_filt(mask));
-end
-
-plot(radial_bins, radial_orig, 'b-', 'LineWidth', 2);
-hold on;
-plot(radial_bins, radial_filt, 'r-', 'LineWidth', 2);
-xlabel('Lag Distance'); ylabel('Correlation');
-title('Radial Autocorrelation Profile');
-legend('Original', 'Filtered');
-grid on;
+xlim([t(1), t(end)]);
 
 %% ============================================================================
-%% FINAL SUMMARY AND RECOMMENDATIONS
+%% ANIMATION GENERATION
 %% ============================================================================
 
-fprintf('\n=== COMPREHENSIVE ANALYSIS COMPLETE ===\n');
-fprintf('\nSTANDING WAVE REMOVAL SUMMARY:\n');
-fprintf('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
-fprintf('Dominant Frequency: %.2f MHz\n', dominant_freq_val/1e6);
-fprintf('Spatial Wavelengths: X=%.1f mm, Y=%.1f mm\n', spatial_wavelength_x, spatial_wavelength_y);
-fprintf('Pixels Affected: %.1f%%\n', 100*sum(standing_wave_mask_adaptive(:))/numel(standing_wave_mask_adaptive));
-fprintf('\nREMOVAL EFFECTIVENESS:\n');
-fprintf('  • Frequency Concentration: %.1f%% reduction\n', concentration_reduction);
-fprintf('  • Spatial Correlation: %.1f%% reduction\n', correlation_reduction);
-fprintf('  • Phase Stability: %.1f%% reduction\n', stability_reduction);
-fprintf('  • Signal Energy Preserved: %.1f%%\n', mean(energy_ratio)*100);
-fprintf('\nQUALITY METRICS:\n');
-fprintf('  • Peak SW Score (Original): %.3f\n', max(sw_score_original));
-fprintf('  • Peak SW Score (Filtered): %.3f\n', max(sw_score_filtered));
-fprintf('  • Average Improvement: %.1f%%\n', mean(removal_effectiveness(removal_effectiveness>0)));
-fprintf('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+fprintf('\n=== GENERATING ANIMATIONS ===\n');
+fprintf('Creating side-by-side comparison animations...\n');
 
-% Save comprehensive results
-standing_wave_analysis = struct();
-standing_wave_analysis.dominant_freq = dominant_freq_val;
-standing_wave_analysis.spatial_wavelengths = [spatial_wavelength_x, spatial_wavelength_y];
-standing_wave_analysis.temporal_scores = struct('original', sw_score_original, 'filtered', sw_score_filtered);
-standing_wave_analysis.verification_metrics = struct(...
-    'concentration_reduction', concentration_reduction, ...
-    'correlation_reduction', correlation_reduction, ...
-    'stability_reduction', stability_reduction, ...
-    'energy_preservation', mean(energy_ratio)*100);
-standing_wave_analysis.mask = standing_wave_mask_adaptive;
-standing_wave_analysis.coherence_map = multi_scale_coherence;
+% Select time range for animation
+[~, anim_start] = min(abs(t - time_range(1)));
+[~, anim_end] = min(abs(t - time_range(2)));
+anim_frames = anim_start:2:anim_end;  % Use every other frame for speed
 
-fprintf('\nData and analysis saved in variables:\n');
-fprintf('  • Data_comprehensive_filt - Filtered ultrasonic data\n');
-fprintf('  • standing_wave_analysis - Complete analysis structure\n');
+% Determine common color scale
+all_data = [Data(:); Data_filtered(:)];
+cmin = prctile(all_data, 1);
+cmax = prctile(all_data, 99);
 
-%% ============================================================================
-%% HELPER FUNCTIONS
-%% ============================================================================
+% Create animation figure
+fig_anim = figure('Name', 'Standing Wave Removal Animation', ...
+    'Position', [150, 150, 1200, 500]);
 
-function periodicity = calculate_enhanced_periodicity(slice)
-    % Enhanced periodicity calculation using multiple methods
-    
-    % Method 1: 2D Autocorrelation peaks
-    autocorr = xcorr2(slice - mean(slice(:)));
-    center_idx = size(autocorr)/2 + 0.5;
-    
-    % Normalize
-    center_val = autocorr(round(center_idx(1)), round(center_idx(2)));
-    if abs(center_val) > 1e-6
-        autocorr = autocorr / center_val;
-    end
-    
-    % Find peaks away from center
-    [X, Y] = meshgrid(1:size(autocorr,2), 1:size(autocorr,1));
-    dist_from_center = sqrt((X-center_idx(2)).^2 + (Y-center_idx(1)).^2);
-    
-    % Mask out center region
-    mask = dist_from_center > 5;
-    autocorr_masked = abs(autocorr) .* mask;
-    
-    % Find significant peaks
-    peaks = autocorr_masked > 0.3; % 30% of center peak
-    periodicity1 = sum(peaks(:)) / numel(peaks);
-    
-    % Method 2: Frequency domain concentration
-    fft2_data = abs(fft2(slice)).^2;
-    sorted_power = sort(fft2_data(:), 'descend');
-    if length(sorted_power) >= 10
-        periodicity2 = sum(sorted_power(2:11)) / sum(sorted_power(2:end)); % Exclude DC
-    else
-        periodicity2 = 0;
-    end
-    
-    % Combine methods
-    periodicity = (periodicity1 + periodicity2) / 2;
-end
+% Preallocate movie frames
+n_anim_frames = length(anim_frames);
+mov = struct('cdata', [], 'colormap', []);
 
-function corr_map = calculate_spatial_correlation_map(data_3d)
-    % Calculate average correlation between adjacent pixels
-    [nx, ny, ~] = size(data_3d);
-    corr_map = zeros(nx-1, ny-1);
+fprintf('Recording %d frames...\n', n_anim_frames);
+for k = 1:n_anim_frames
+    frame_idx = anim_frames(k);
     
-    for i = 1:nx-1
-        for j = 1:ny-1
-            % Get four adjacent pixels
-            signal_00 = squeeze(data_3d(i,j,:));
-            signal_10 = squeeze(data_3d(i+1,j,:));
-            signal_01 = squeeze(data_3d(i,j+1,:));
-            
-            % Calculate correlations
-            if max(abs(signal_00)) > 1e-6
-                corr1 = max(xcorr(signal_00, signal_10, 'normalized'));
-                corr2 = max(xcorr(signal_00, signal_01, 'normalized'));
-                corr_map(i,j) = (corr1 + corr2) / 2;
-            end
-        end
+    % Original data
+    subplot(1, 3, 1);
+    imagesc(x, y, Data(:, :, frame_idx).');
+    title(sprintf('Original Data - t = %.2f μs', t(frame_idx)));
+    xlabel('X Position'); ylabel('Y Position');
+    colorbar; caxis([cmin, cmax]);
+    axis equal tight;
+    
+    % Filtered data
+    subplot(1, 3, 2);
+    imagesc(x, y, Data_filtered(:, :, frame_idx).');
+    title(sprintf('Filtered Data - t = %.2f μs', t(frame_idx)));
+    xlabel('X Position'); ylabel('Y Position');
+    colorbar; caxis([cmin, cmax]);
+    axis equal tight;
+    
+    % Difference
+    subplot(1, 3, 3);
+    diff_data = Data(:, :, frame_idx) - Data_filtered(:, :, frame_idx);
+    imagesc(x, y, diff_data.');
+    title('Removed Components (Standing Waves)');
+    xlabel('X Position'); ylabel('Y Position');
+    colorbar; colormap(gca, 'seismic');
+    caxis([-max(abs(diff_data(:))), max(abs(diff_data(:)))]);
+    axis equal tight;
+    
+    drawnow;
+    mov(k) = getframe(fig_anim);
+    
+    if mod(k, 10) == 0
+        fprintf('  Frame %d/%d\n', k, n_anim_frames);
     end
 end
 
-function stability_map = calculate_phase_stability(data_3d, fs)
-    % Calculate phase stability using instantaneous frequency variance
-    [nx, ny, nt] = size(data_3d);
-    stability_map = zeros(nx, ny);
-    
-    for i = 1:nx
-        for j = 1:ny
-            signal = squeeze(data_3d(i,j,:));
-            
-            if max(abs(signal)) > 1e-6
-                % Hilbert transform for instantaneous phase
-                analytic = hilbert(signal);
-                inst_phase = unwrap(angle(analytic));
-                
-                % Instantaneous frequency
-                inst_freq = diff(inst_phase) * fs / (2*pi);
-                
-                % Stability = inverse of frequency variance
-                stability_map(i,j) = 1 / (var(inst_freq) + 1e-6);
-            end
-        end
-    end
+% Save animation as video file
+fprintf('Saving animation as AVI file...\n');
+video_writer = VideoWriter('standing_wave_removal_animation.avi');
+video_writer.FrameRate = animation_fps;
+open(video_writer);
+writeVideo(video_writer, mov);
+close(video_writer);
+fprintf('Animation saved as: standing_wave_removal_animation.avi\n');
+
+%% ============================================================================
+%% WATERFALL PLOT FOR TEMPORAL EVOLUTION
+%% ============================================================================
+
+figure('Name', 'Temporal Evolution Analysis', 'Position', [200, 200, 1000, 800]);
+
+% Select a line through a standing wave region
+line_y = sw_y;  % Use the y-position of maximum standing wave
+
+% Create waterfall plot
+subplot(2, 1, 1);
+waterfall_frames = 1:10:nt;  % Every 10th frame
+waterfall_data_orig = zeros(length(waterfall_frames), nx);
+waterfall_data_filt = zeros(length(waterfall_frames), nx);
+
+for idx = 1:length(waterfall_frames)
+    frame = waterfall_frames(idx);
+    waterfall_data_orig(idx, :) = Data(:, line_y, frame);
+    waterfall_data_filt(idx, :) = Data_filtered(:, line_y, frame);
 end
 
-fprintf('\nScript execution completed successfully!\n');
+% Original data waterfall
+surf(x, t(waterfall_frames), waterfall_data_orig);
+shading interp; colormap(jet);
+xlabel('X Position'); ylabel('Time (μs)'); zlabel('Amplitude');
+title(sprintf('Original Data Evolution at Y=%d', line_y));
+view(-45, 30);
+
+subplot(2, 1, 2);
+surf(x, t(waterfall_frames), waterfall_data_filt);
+shading interp; colormap(jet);
+xlabel('X Position'); ylabel('Time (μs)'); zlabel('Amplitude');
+title(sprintf('Filtered Data Evolution at Y=%d', line_y));
+view(-45, 30);
+
+%% ============================================================================
+%% SUMMARY REPORT
+%% ============================================================================
+
+fprintf('\n=== STANDING WAVE REMOVAL SUMMARY ===\n');
+fprintf('=====================================\n\n');
+
+fprintf('Detection Results:\n');
+fprintf('- Total spatial positions analyzed: %d\n', nx * ny);
+fprintf('- Standing wave positions detected: %d (%.1f%%)\n', ...
+    sum(standing_wave_mask(:)), 100 * sum(standing_wave_mask(:)) / numel(standing_wave_mask));
+fprintf('- Maximum temporal coherence: %.3f\n', max(standing_wave_probability(:)));
+fprintf('- Maximum phase stability: %.3f\n', max(phase_stability_map(:)));
+
+fprintf('\nFiltering Performance:\n');
+fprintf('- Average variance reduction in SW regions: %.1f%%\n', ...
+    100 * mean(variance_reduction_sw));
+fprintf('- Average variance reduction in other regions: %.1f%%\n', ...
+    100 * mean(variance_reduction_other));
+fprintf('- Average SNR improvement: %.1f dB\n', mean(snr_improvement(:)));
+fprintf('- Maximum SNR improvement: %.1f dB\n', max(snr_improvement(:)));
+
+fprintf('\nFrequency Analysis:\n');
+[~, peak_freq_idx] = max(avg_spectrum_original);
+peak_freq = freq_axis(peak_freq_idx) / 1e6;
+fprintf('- Dominant frequency in SW regions: %.2f MHz\n', peak_freq);
+reduction_at_peak = 100 * (1 - avg_spectrum_filtered(peak_freq_idx) / avg_spectrum_original(peak_freq_idx));
+fprintf('- Amplitude reduction at dominant frequency: %.1f%%\n', reduction_at_peak);
+
+fprintf('\nOutput Files Generated:\n');
+fprintf('- standing_wave_removal_animation.avi\n');
+fprintf('- Multiple analysis figures\n');
+
+fprintf('\nRecommendations:\n');
+if mean(variance_reduction_sw) > 0.5
+    fprintf('✓ Excellent standing wave suppression achieved\n');
+else
+    fprintf('⚠ Moderate suppression - consider adjusting parameters\n');
+end
+
+if mean(variance_reduction_other) < 0.1
+    fprintf('✓ Good preservation of non-standing wave signals\n');
+else
+    fprintf('⚠ Some signal loss in non-SW regions - reduce suppression factor\n');
+end
+
+% Save results
+fprintf('\nSaving analysis results...\n');
+save('standing_wave_removal_results.mat', ...
+    'Data_filtered', 'standing_wave_mask', 'combined_standing_wave_map', ...
+    'temporal_coherence_map', 'phase_stability_map', 'variance_reduction', ...
+    'snr_improvement', '-v7.3');
+
+fprintf('\nAnalysis complete! Results saved to standing_wave_removal_results.mat\n');
+fprintf('Animation saved to standing_wave_removal_animation.avi\n');
